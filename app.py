@@ -18,7 +18,7 @@ from m2m_commands.github_store import GitHubError, GitHubStore
 from m2m_commands.jobs import (
     ACTIVITY_LABELS, ANSWERED, CREATED, ERROR, LABELS, NO_ANSWER, NOT_SENT, ONLINE, PERM_CREATE, PERM_EXECUTE,
     QUEUED, RUNNING, SENT, SKIPPED, STALE, TODAY, CreateJob, Device, DispatchJob, LoadCfg, ScanJob, activity,
-    by_priority, find_by_name, now_utc,
+    by_priority, days_ago, find_by_name, now_utc,
 )
 from m2m_commands.stats import command_dir, device_rows, fmt_local, group_summary, merge_run, objects_table
 
@@ -31,8 +31,9 @@ st.set_page_config(page_title="Масові команди M2M", layout="wide")
 st.markdown(
     """
     <style>
-    .block-container {max-width: 1080px; padding-top: 2.6rem;}
+    .block-container {max-width: 1640px; padding-top: 2.6rem;}
     [data-testid="stMetricValue"] {font-size: 1.9rem;}
+    section[data-testid="stSidebar"] {width: 240px !important; min-width: 240px !important;}
     [data-testid="stSidebar"] [data-testid="stNumberInput"] input {background: #FFFFFF;}
     </style>
     """,
@@ -185,10 +186,12 @@ def styled(df: pd.DataFrame, col: str = "Статус"):
         bg, fg = STATUS_COLORS.get(v, ("", ""))
         return f"background-color: {bg}; color: {fg}; font-weight: 600" if bg else ""
 
-    by_label = {f"● {lbl}": ACT_TEXT[k] for k, lbl in ACTIVITY_LABELS.items()}
-
     def paint_act(v):
-        return f"color: {by_label[v]}; font-weight: 600" if v in by_label else ""
+        if not isinstance(v, str) or not v.startswith("●"):
+            return ""
+        k = ONLINE if v.startswith(f"● {ACTIVITY_LABELS[ONLINE]}") else TODAY if v.startswith(
+            f"● {ACTIVITY_LABELS[TODAY]}") else STALE
+        return f"color: {ACT_TEXT[k]}; font-weight: 600"
 
     sty = df.style.map(paint, subset=[col])
     if "Активність" in df.columns:
@@ -196,14 +199,15 @@ def styled(df: pd.DataFrame, col: str = "Статус"):
     return sty
 
 
-def act_label(k: str) -> str:
-    return f"● {ACTIVITY_LABELS[k]}"
+def act_label(k: str, last_message: datetime | None = None) -> str:
+    """● Онлайн / ● Сьогодні / ● вчора, ● 5 дн тому, ● ніколи."""
+    return f"● {days_ago(last_message)}" if k == STALE else f"● {ACTIVITY_LABELS[k]}"
 
 
 def activity_bar(counts: dict[str, int], online_min: int) -> None:
     """Смуга розподілу об'єктів за давністю останнього повідомлення + легенда."""
     total = sum(counts.values()) or 1
-    names = {ONLINE: f"Онлайн (≤ {online_min} хв)", TODAY: "За добу", STALE: "Давніше / ніколи"}
+    names = {ONLINE: f"Онлайн (≤ {online_min} хв)", TODAY: "Сьогодні", STALE: "Раніше / ніколи"}
     segs = "".join(f"<div style='width:{counts.get(k, 0) / total * 100:.3f}%;background:{ACT_COLORS[k]}'></div>"
                    for k in ACTIVITY_LABELS if counts.get(k))
     legend = "".join(
@@ -216,6 +220,19 @@ def activity_bar(counts: dict[str, int], online_min: int) -> None:
         f"<div style='font-size:14px;color:#31333F;display:flex;flex-wrap:wrap'>{legend}</div>",
         unsafe_allow_html=True,
     )
+
+
+# Ширина колонок у таблицях: вузькі службові колонки компактні, текст відповіді — широкий.
+COL_WIDTHS = {
+    "№": 40, "Прийняв": 75, "Активність": 105, "Надіслано": 80, "Отримано": 80, "Статус": 115,
+    "Об'єкт": 140, "IMEI": 140, "ID об'єкта": 85, "Останнє повідомлення": 160, "Коли відповів": 125,
+    "Останнє надсилання": 130, "Скільки разів надсилали": 90,
+    "Відповідь трекера / деталі": "medium", "Відповідь трекера": "medium", "Деталі": "medium",
+}
+
+
+def col_cfg(df: pd.DataFrame) -> dict:
+    return {c: st.column_config.Column(width=w) for c, w in COL_WIDTHS.items() if c in df.columns}
 
 
 def csv_bytes(df: pd.DataFrame) -> bytes:
@@ -400,7 +417,8 @@ def create_tab() -> None:
                 rows.append({"Об'єкт": d.name, "IMEI": d.imei, "Останнє повідомлення": last_seen(d.last_message),
                              f"Право «{PERM_CREATE}»": {True: "Є", False: "Немає"}.get(d.can_create, "—"),
                              f"Команда «{name}»" if name else "Команда": state})
-            st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=360)
+            dfo = pd.DataFrame(rows)
+            st.dataframe(dfo, hide_index=True, width="stretch", height=360, column_config=col_cfg(dfo))
 
     ready = bool(name and text.strip()) and bool(allowed) and not any_running()
     label = f"Створити на {n_obj(to_create, OBJ_LOC)}" if scan and name else f"Створити на {n_obj(len(allowed), OBJ_LOC)}"
@@ -485,7 +503,7 @@ def create_progress(job: CreateJob) -> None:
                                    format_func=lambda k: f"{filters[k][0]} · {fmt_n(len(rows) if k == 'all' else c.get(k, 0))}")
         keep = filters.get(flt or "all", filters["all"])[1]
         view = df[[keep is None or r["status"] in keep for r in rows]] if len(df) else df
-        st.dataframe(styled(view), hide_index=True, width="stretch", height=420)
+        st.dataframe(styled(view), hide_index=True, width="stretch", height=420, column_config=col_cfg(view))
         if run_every and not job.running:
             st.rerun()
 
@@ -804,7 +822,7 @@ def stats_tab() -> None:
         with st.expander(label):
             rows = device_rows(g)
             df = pd.DataFrame(rows)
-            st.dataframe(styled(df, "Прийняв"), hide_index=True, width="stretch",
+            st.dataframe(styled(df, "Прийняв"), hide_index=True, width="stretch", column_config=col_cfg(df),
                          height=min(420, 40 + 35 * max(1, len(rows))))
             c1, c2 = st.columns([3, 1], vertical_alignment="center")
             c1.caption(f"Спершу ті, що прийняли, потім ті, що ні. Запусків на цій групі: {x['runs']}.")
@@ -890,8 +908,9 @@ def dispatch_progress(job: DispatchJob) -> None:
                     waited_min = ((job.wait_minutes * 60) - (job.wait_left or 0)) / 60
                     if ws["woke"] == 0 and checked != "ще ні" and waited_min >= 2:
                         st.info("Ніхто з тих, хто чекає, після відправки на зв'язок не виходив — чекати далі, "
-                                "найімовірніше, немає сенсу. Можна натиснути «Зупинити очікування», а коли вони "
-                                "з'являться онлайн — «Ще раз — без відповіді».")
+                                "найімовірніше, немає сенсу. Можна натиснути «Зупинити очікування» і пізніше "
+                                "надіслати їм ще раз кнопкою «Ще раз — без відповіді» (вона стає активною після "
+                                "завершення очікування; сама за онлайном не стежить).")
                 if job.activity_error:
                     st.caption(job.activity_error)
         m = st.columns(4)
@@ -938,13 +957,15 @@ def dispatch_progress(job: DispatchJob) -> None:
         # у порядку відправки (онлайн першими, якщо увімкнено пріоритет), пропущені — в кінці
         rows.sort(key=lambda r: (r["order"] is None, r["order"] or 0, r["name"].lower()))
         df = pd.DataFrame([{
-            "№": str(r["order"] or ""), "Об'єкт": r["name"], "Активність": act_label(r["activity"]),
+            "№": str(r["order"] or ""), "Об'єкт": r["name"], "Активність": act_label(r["activity"], r["last_message"]),
             "Останнє повідомлення": last_seen(r["last_message"]), "Надіслано": fmt_time(r["sent_at"]),
             "Статус": LABELS[r["status"]], "Відповідь трекера / деталі": r["answer"] or r["detail"] or (
                 ("Вийшов на зв'язок після відправки — відповіді ще немає" if DispatchJob.woke(r)
                  else "Після відправки на зв'язок не виходив") if r["status"] == SENT else ""),
             "Отримано": fmt_time(r["answered_at"]), "IMEI": r["imei"],
         } for r in rows])
+        if len(df) and not df["IMEI"].astype(bool).any():
+            df = df.drop(columns=["IMEI"])  # API не віддає IMEI — не займаємо місце порожньою колонкою
         b[2].download_button("Завантажити звіт CSV", csv_bytes(df), width="stretch", disabled=job.running,
                              file_name=f"dispatch_{job.name}_{datetime.now(LOCAL_TZ):%Y%m%d_%H%M}.csv",
                              mime="text/csv", key="d_csv")
@@ -965,7 +986,7 @@ def dispatch_progress(job: DispatchJob) -> None:
                                    format_func=lambda k: f"{filters[k][0]} · {fmt_n(count(k))}")
         keep = filters.get(flt or "all", filters["all"])[1]
         view = df[[keep is None or r["status"] in keep for r in rows]] if len(df) else df
-        st.dataframe(styled(view), hide_index=True, width="stretch", height=460)
+        st.dataframe(styled(view), hide_index=True, width="stretch", height=560, column_config=col_cfg(view))
         if run_every and not job.running and job.save_state[0] not in ("pending", "saving"):
             S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
             st.rerun()

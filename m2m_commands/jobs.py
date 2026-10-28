@@ -15,6 +15,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from .client import M2MClient
 from .errors import ApiError
@@ -33,7 +34,7 @@ PERM_EXECUTE = "Виконання команд"
 
 # активність об'єкта за часом останнього повідомлення
 ONLINE, TODAY, STALE = "online", "today", "stale"
-ACTIVITY_LABELS = {ONLINE: "Онлайн", TODAY: "За добу", STALE: "Давніше"}
+ACTIVITY_LABELS = {ONLINE: "Онлайн", TODAY: "Сьогодні", STALE: "Давніше"}
 
 
 # ---------------------------------------------------------------- дані
@@ -98,14 +99,31 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+try:
+    LOCAL_TZ = ZoneInfo("Europe/Kyiv")
+except Exception:  # noqa: BLE001 — старіша база часових зон
+    LOCAL_TZ = ZoneInfo("Europe/Kiev")
+
+
 def activity(last_message: datetime | None, online_min: float, now: datetime | None = None) -> str:
-    """online — повідомлення не давніше online_min хв, today — за останню добу, stale — давніше або ніколи."""
+    """online — повідомлення не давніше online_min хв; today — сьогодні (за київським календарем);
+    stale — раніше або ніколи."""
     if last_message is None:
         return STALE
-    age = (now or now_utc()) - last_message
-    if age <= timedelta(minutes=online_min):
+    now = now or now_utc()
+    if now - last_message <= timedelta(minutes=online_min):
         return ONLINE
-    return TODAY if age <= timedelta(days=1) else STALE
+    return TODAY if last_message.astimezone(LOCAL_TZ).date() == now.astimezone(LOCAL_TZ).date() else STALE
+
+
+def days_ago(last_message: datetime | None, now: datetime | None = None) -> str:
+    """«вчора», «5 дн тому», «ніколи» — за календарними днями (Київ)."""
+    if last_message is None:
+        return "ніколи"
+    days = ((now or now_utc()).astimezone(LOCAL_TZ).date() - last_message.astimezone(LOCAL_TZ).date()).days
+    if days <= 0:
+        return "сьогодні"
+    return "вчора" if days == 1 else f"{days} дн тому"
 
 
 def by_priority(targets: list[tuple["Device", int]]) -> list[tuple["Device", int]]:

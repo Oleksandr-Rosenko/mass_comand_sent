@@ -211,7 +211,7 @@ def test_priority_online_first():
     sent_order = [did for did, _ in api.dispatched]
     assert sent_order == [d.id for d, _ in targets]
     stats = job.activity_stats()
-    assert stats[STALE]["sent"] == len([i for i in range(1, 31) if i % 9 == 0])
+    assert stats[STALE]["sent"] == sum(1 for d, _ in targets if activity(d.last_message, 10) == STALE)
     assert sum(v["answered"] for v in stats.values()) == 30
     srv.shutdown()
 
@@ -223,6 +223,13 @@ def test_activity_buckets():
     assert activity(now - timedelta(minutes=11), 10, now) == TODAY
     assert activity(now - timedelta(hours=30), 10, now) == STALE
     assert activity(None, 10, now) == STALE
+    # «Сьогодні» — за київським календарем: 23:50 вчора о 00:10 вже не сьогодні
+    late = datetime(2026, 10, 27, 21, 50, tzinfo=timezone.utc)   # 23:50 за Києвом
+    assert activity(late, 10, late + timedelta(minutes=20)) == STALE
+    from m2m_commands.jobs import days_ago
+    assert days_ago(late, late + timedelta(minutes=20)) == "вчора"
+    assert days_ago(now - timedelta(days=5), now) == "5 дн тому"
+    assert days_ago(None, now) == "ніколи"
 
 
 ALLOWED = {
