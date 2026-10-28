@@ -37,6 +37,8 @@ class FakeM2M:
             self._add(i, name, text + "_OLD")
         self.silent, self.flaky, self.uncertain = set(silent), set(flaky_create), set(uncertain_create)
         self.dispatch_403 = set(dispatch_403)
+        self.dispatch_503: set[int] = set()   # сервер «виконав», але відповів 503
+        self.log: list[tuple[str, str]] = []  # усі запити (метод, шлях) — для перевірки, що нічого зайвого
         self.ascending, self.answer_delay = ascending, answer_delay
         self.history = [{"id": i, "type": "COMMAND_RESULT", "deviceId": 1, "deviceName": "Генератор 001",
                          "message": "старий результат", "createdAt": "2026-10-01T10:00:00Z"} for i in range(1, 251)]
@@ -125,6 +127,8 @@ class FakeM2M:
                 self.dispatched.append((did, cid))
             if did not in self.silent:
                 self._answer_later(did)
+            if did in self.dispatch_503:
+                return 503, {"message": "Service Unavailable"}
             return 200, None
         if path == "/api/notification/history":
             per = int(query.get("per_page", ["10"])[0])
@@ -148,6 +152,7 @@ class FakeM2M:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}") if n else {}
                 with api.lock:
+                    api.log.append((method, u.path))
                     api.active += 1
                     api.requests += 1
                     api.max_active = max(api.max_active, api.active)
@@ -169,6 +174,15 @@ class FakeM2M:
 
             def do_POST(self):
                 self._do("POST")
+
+            def do_PUT(self):
+                self._do("PUT")
+
+            def do_DELETE(self):
+                self._do("DELETE")
+
+            def do_PATCH(self):
+                self._do("PATCH")
 
         srv = ThreadingHTTPServer(("127.0.0.1", port), H)
         srv.daemon_threads = True

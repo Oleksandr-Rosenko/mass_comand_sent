@@ -197,5 +197,63 @@ def test_activity_buckets():
     assert activity(None, 10, now) == STALE
 
 
+ALLOWED = {
+    ("POST", "/api/login"),
+    ("POST", "/api/token/refresh"),
+    ("GET", "/api/device/groups/lightweight/all"),
+    ("GET", "/api/group/{id}/devices"),
+    ("GET", "/api/device/{id}/commands"),
+    ("GET", "/api/notification/history"),
+    ("POST", "/api/device/{id}/commands"),             # створення команди
+    ("POST", "/api/device/{id}/command/{id}/dispatch"),  # відправка команди
+}
+
+
+def test_full_cycle_makes_only_allowed_requests():
+    """Повний цикл не робить нічого, крім читання, створення команди й відправки: жодних PUT/DELETE/PATCH."""
+    import re as _re
+    api = FakeM2M(n_devices=40, have_cmd=(3,), other_text=(4,), no_create=(5,), flaky_create=(6,),
+                  uncertain_create=(7,), dispatch_403=(8,), silent=(9,), expire_token_after=50)
+    cl, srv = connect(api)
+    cl.groups()
+    devs = devices_of(cl)
+    cfg = LoadCfg(batch_size=10, pause=0, workers=4)
+    sc = scan(cl, devs, cfg)
+    cj = CreateJob(cl, {"id": 7, "name": "Г"}, devs, NAME, TEXT, cfg, scan=sc)
+    cj.start()
+    cj.wait(60)
+    targets = [(d, c.id) for d in devs for c in sc.commands.get(d.id, []) if c.name == NAME and c.text == TEXT]
+    dj = DispatchJob(cl, {"id": 7, "name": "Г"}, NAME, TEXT, targets, [], cfg, wait_minutes=0.02)
+    dj.start()
+    dj.wait(60)
+    dj.poll()
+    seen = {(m, _re.sub(r"/\d+", "/{id}", p)) for m, p in api.log}
+    assert seen <= ALLOWED, seen - ALLOWED
+    assert not any(m in ("PUT", "DELETE", "PATCH") for m, _ in api.log)
+    # нічого не змінено в чужих командах: стара «NTP» з іншим текстом і «01. GETVER» лишились як були
+    assert [c["attributes"]["data"] for c in api.commands[4] if c["description"] == NAME] == [TEXT + "_OLD"]
+    assert all(api.commands[i][0]["description"] == "01. GETVER" for i in api.commands)
+    # команда надіслана лише тим, у кого є «NTP» з потрібним текстом, і кожному рівно раз
+    sent_to = [d for d, _ in api.dispatched]
+    assert len(sent_to) == len(set(sent_to)) == len(targets) - 1  # об'єкт 8 відхилено сервером (403)
+    assert 4 not in sent_to and 8 not in sent_to
+    assert dj.rows[8]["status"] == ERROR
+    srv.shutdown()
+
+
+def test_dispatch_503_is_not_resent():
+    api = FakeM2M(n_devices=3, have_cmd=(1, 2, 3), silent=(1, 2, 3))
+    api.dispatch_503 = {2}
+    cl, srv = connect(api)
+    devs = {d.id: d for d in devices_of(cl)}
+    targets = [(devs[i], api.commands[i][-1]["id"]) for i in (1, 2, 3)]
+    job = DispatchJob(cl, {"id": 7, "name": "Г"}, NAME, TEXT, targets, [], LoadCfg(pause=0), wait_minutes=0.01)
+    job.start()
+    job.wait(30)
+    assert [d for d, _ in api.dispatched].count(2) == 1  # не надіслали вдруге
+    assert "не підтвердив" in job.rows[2]["detail"]
+    srv.shutdown()
+
+
 def test_clean_message():
     assert clean_message('Готово <a href="/x">тут</a>  ок') == "Готово тут ок"

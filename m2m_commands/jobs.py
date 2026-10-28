@@ -345,18 +345,24 @@ class CreateJob(BaseJob):
                 note = "" if c.text == self.text else " · інший текст"
                 self._set(did, status=SKIPPED, detail=f"«{self.name}» вже є · ID {c.id}{note}", command_id=c.id)
                 return
-            try:
-                created = self.client.create_command(did, self.name, self.text)
-            except ApiError as e:
-                if not e.uncertain:
-                    raise
-                # Сервер не підтвердив — перевіряємо, чи команда все ж створилась, щоб не робити дубль.
-                same = find_by_name(self._existing(did), self.name)
-                if not same:
-                    raise
-                self._set(did, status=CREATED, detail=f"ID команди {same[0].id} (перевірено після збою)",
-                          command_id=same[0].id)
-                return
+            created: dict = {}
+            for attempt in range(self.client.retries + 1):
+                try:
+                    created = self.client.create_command(did, self.name, self.text)
+                    break
+                except ApiError as e:
+                    if not e.uncertain:
+                        raise
+                    # Сервер не підтвердив. Спершу перевіряємо, чи команда все ж створилась (тоді дубль не робимо),
+                    # і лише якщо її точно немає — пробуємо ще раз.
+                    same = find_by_name(self._existing(did), self.name)
+                    if same:
+                        self._set(did, status=CREATED, detail=f"ID команди {same[0].id} (перевірено після збою)",
+                                  command_id=same[0].id)
+                        return
+                    if attempt >= self.client.retries:
+                        raise
+                    time.sleep(1.5 * (attempt + 1))
             cid = created.get("id")
             if self.scan is not None and cid is not None:
                 cmds = list(self.scan.commands.get(did, []))
