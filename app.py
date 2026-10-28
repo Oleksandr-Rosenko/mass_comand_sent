@@ -240,13 +240,22 @@ def activity_bar(counts: dict[str, int], online_min: int) -> None:
 # Ширина колонок у таблицях: вузькі службові колонки компактні, текст відповіді — широкий.
 COL_WIDTHS = {
     "№": 36, "Прийняв": 64, "Статус": 140, "Об'єкт": 115, "IMEI": 125, "Останнє повідомлення": 150,
-    "Коли відповів": 105, "Надсилали": 72, "Деталі": 260,
+    "Коли відповів": 125, "Разів надіслано": 110, "Деталі": 260,
     "Відповідь трекера / деталі": 330, "Відповідь / причина": 330,
 }
 
 
+COL_HELP = {
+    "Разів надіслано": "Скільки запусків надсилали команду цьому об'єкту (у цій групі). 1 — один раз; "
+                       "більше — надсилали повторно, бо раніше не було відповіді. 0 — не надсилали.",
+    "Відповідь / причина": "Для тих, хто прийняв, — відповідь трекера; для решти — чому ні і що робити. "
+                           "Повні деталі — у «CSV групи».",
+}
+
+
 def col_cfg(df: pd.DataFrame) -> dict:
-    return {c: st.column_config.Column(width=w) for c, w in COL_WIDTHS.items() if c in df.columns}
+    return {c: st.column_config.Column(width=w, help=COL_HELP.get(c)) for c, w in COL_WIDTHS.items()
+            if c in df.columns}
 
 
 def drop_empty(df: pd.DataFrame, cols=("IMEI",)) -> pd.DataFrame:
@@ -949,15 +958,14 @@ def stats_tab() -> None:
             df = pd.DataFrame(rows)
             view = pd.DataFrame([{
                 "Прийняв": r["Прийняв"], "Об'єкт": r["Об'єкт"],
-                "Відповідь / причина": r["Відповідь трекера"] if r["Прийняв"] == "Так"
-                else " · ".join(x for x in (r["Статус"], r["Деталі"]) if x),
-                "Коли відповів": r["Коли відповів"], "Надсилали": r["Скільки разів надсилали"],
-                "Останнє повідомлення": r["Останнє повідомлення"],
+                "Відповідь / причина": r["Відповідь трекера"] if r["Прийняв"] == "Так" else r["Статус"],
+                "Коли відповів": r["Коли відповів"], "Разів надіслано": r["Скільки разів надсилали"],
             } for r in rows])
             st.dataframe(styled(view, "Прийняв"), hide_index=True, width="stretch", column_config=col_cfg(view),
                          height=min(420, 40 + 35 * max(1, len(rows))))
             c1, c2 = st.columns([3, 1], vertical_alignment="center")
-            c1.caption(f"Спершу ті, що прийняли, потім ті, що ні. Запусків на цій групі: {x['runs']}.")
+            c1.caption(f"Спершу ті, що прийняли, потім ті, що ні. «Разів надіслано» — скільки разів цьому об'єкту "
+                       f"надсилали команду. Запусків на цій групі: {x['runs']}.")
             c2.download_button("CSV групи", csv_bytes(df), width="stretch", key=f"st_csv_{gid}",
                                file_name=f"{name}_{g['name']}_{datetime.now(LOCAL_TZ):%Y%m%d}.csv", mime="text/csv")
     for g in unchecked:
