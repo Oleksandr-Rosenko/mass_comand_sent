@@ -37,7 +37,7 @@ st.markdown(
 
 S = st.session_state
 for k, v in {"client": None, "groups": [], "devices": {}, "scans": {}, "create_job": None, "create_stage": "form",
-             "dispatch_job": None, "dispatch_stage": "form", "prev_dispatch": {}, "last_name": "",
+             "dispatch_job": None, "dispatch_stage": "form", "prev_dispatch": {}, "runs": {}, "last_name": "",
              "d_wait": 15, "d_online": 10, "d_priority": True}.items():
     S.setdefault(k, v)
 # Streamlit забуває значення полів, які в цьому проході не намальовані (напр., форма під час прогресу).
@@ -517,6 +517,8 @@ def dispatch_tab() -> None:
         st.warning(f"На {n_obj(others, OBJ_LOC)} команда «{name}» має інший текст — їх не надсилаємо.")
 
     prev: DispatchJob | None = S.prev_dispatch.get((gid, name, text))
+    if S.runs.get((gid, name, text)):
+        stats_section(gid, name, text, "df")
 
     # активність об'єктів, на які в принципі можна надіслати цю команду
     st.markdown("**Активність об'єктів з цією командою**")
@@ -564,11 +566,85 @@ def dispatch_tab() -> None:
         job = DispatchJob(S.client, group_by_id(gid), name, text, targets, skipped, load_cfg(),
                           wait_minutes=float(wait), poll_every=float(S.get("cfg_poll", 15)), online_min=online_min)
         S.dispatch_job, S.dispatch_stage = job, "progress"
+        register_run(job)
         job.start()
         st.rerun()
     if reasons:
         b2.caption("Пропускаємо: " + "; ".join(f"{r[:1].lower() + r[1:]} — {fmt_n(n)}" for r, n in
                                                 sorted(reasons.items(), key=lambda x: -x[1])))
+
+
+def register_run(job: DispatchJob) -> None:
+    S.runs.setdefault((job.group["id"], job.name, job.text), []).append(job)
+
+
+_RANK = {ANSWERED: 6, SENT: 5, RUNNING: 5, QUEUED: 5, NO_ANSWER: 4, ERROR: 3, NOT_SENT: 2, SKIPPED: 1}
+
+
+def stats_rows(gid: int, name: str, text: str) -> list[dict]:
+    """По кожному об'єкту групи: чи застосована команда (трекер відповів) у будь-якому із запусків цієї сесії."""
+    runs: list[DispatchJob] = S.runs.get((gid, name, text), [])
+    snaps = [{r["id"]: r for r in j.snapshot()} for j in runs]
+    scan: ScanJob | None = S.scans.get(gid)
+    out = []
+    for d in S.devices.get(gid, []):
+        rows = [s[d.id] for s in snaps if d.id in s]
+        sent = [r for r in rows if r["sent_at"]]
+        best = max(rows, key=lambda r: (_RANK.get(r["status"], 0), r["answered_at"] or r["sent_at"] or now_utc()),
+                   default=None)
+        if best is not None and best["status"] == ANSWERED:
+            applied, status = "Так", "Відповів"
+        elif best is not None and best["status"] != SKIPPED:
+            applied = "Ні"
+            status = {NO_ANSWER: "Без відповіді", ERROR: "Помилка відправки", NOT_SENT: "Не надіслано (зупинено)"}.get(
+                best["status"], "Чекаємо відповідь")
+        else:
+            applied = "Ні"
+            same = find_by_name(scan.commands.get(d.id, []), name) if scan else []
+            if best is not None:
+                status = best["detail"]
+            elif scan and d.id in scan.errors:
+                status = "Не вдалося прочитати команди"
+            elif scan and not same:
+                status = f"Немає команди «{name}»"
+            elif same and not any(c.text == text for c in same):
+                status = f"Інший текст команди «{name}»"
+            else:
+                status = "Не надсилали"
+        detail = ""
+        if best is not None and best["status"] != ANSWERED and best["status"] != SKIPPED:
+            detail = best["detail"]
+        out.append({
+            "Об'єкт": d.name, "IMEI": d.imei, "ID об'єкта": d.id, "Застосовано": applied, "Статус": status,
+            "Відповідь трекера": best["answer"] if best else "", "Коли відповів": fmt_time(best["answered_at"], True)
+            if best and best["answered_at"] else "", "Останнє надсилання": fmt_time(max(r["sent_at"] for r in sent), True)
+            if sent else "", "Скільки разів надсилали": len(sent), "Деталі": detail,
+            "Останнє повідомлення": fmt_time(d.last_message, True) if d.last_message else "",
+        })
+    return out
+
+
+def stats_section(gid: int, name: str, text: str, key: str, disabled: bool = False) -> None:
+    """Підсумок «застосовано / ні» по групі за всі запуски цієї команди + CSV зі списком."""
+    rows = stats_rows(gid, name, text)
+    if not rows:
+        return
+    runs = len(S.runs.get((gid, name, text), []))
+    yes = sum(1 for r in rows if r["Застосовано"] == "Так")
+    no_answer = sum(1 for r in rows if r["Статус"] in ("Без відповіді", "Помилка відправки", "Не надіслано (зупинено)"))
+    rest = len(rows) - yes - no_answer
+    with st.container(border=True):
+        s1, s2 = st.columns([3, 2], vertical_alignment="center")
+        s1.markdown(f"**Статистика по групі «{group_by_id(gid)['name']}» · «{name}»**  \n"
+                    f"<span style='font-size:14px;color:#555A66'>Застосовано на <b style='color:#14632B'>"
+                    f"{fmt_n(yes)}</b> з {n_obj(len(rows), OBJ_LOC)} · без відповіді або помилка — {fmt_n(no_answer)}"
+                    f" · не надсилали або немає команди — {fmt_n(rest)} · запусків: {runs}</span>",
+                    unsafe_allow_html=True)
+        s2.download_button("Статистика по групі (CSV)", csv_bytes(pd.DataFrame(rows)), width="stretch",
+                           file_name=f"stats_{name}_{group_by_id(gid)['name']}_{datetime.now(LOCAL_TZ):%Y%m%d_%H%M}.csv",
+                           mime="text/csv", key=f"{key}_stats", disabled=disabled,
+                           help="Кожен об'єкт групи: застосовано (трекер відповів) чи ні і чому — "
+                                "зведено з усіх запусків цієї команди в поточній сесії")
 
 
 def resend(job: DispatchJob) -> None:
@@ -584,6 +660,7 @@ def resend(job: DispatchJob) -> None:
                       online_min=job.online_min)
     S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
     S.dispatch_job = new
+    register_run(new)
     new.start()
 
 
@@ -642,6 +719,7 @@ def dispatch_progress(job: DispatchJob) -> None:
                            f"не надіслано або помилка — {fmt_n(errors)}.")
             elif sent:
                 st.success(f"Усі {n_obj(answered)} відповіли.")
+        stats_section(job.group["id"], job.name, job.text, "dp", disabled=job.running)
 
         b = st.columns(4)
         if job.running and job.phase in ("idle", "baseline", "sending"):
