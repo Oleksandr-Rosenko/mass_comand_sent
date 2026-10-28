@@ -15,12 +15,14 @@ import streamlit as st
 from m2m_commands.client import NAME_MAX, TEXT_MAX, M2MClient
 from m2m_commands.errors import ApiError
 from m2m_commands.github_store import GitHubError, GitHubStore
+from m2m_commands.sync import sync_docs
 from m2m_commands.jobs import (
     ACTIVITY_LABELS, ANSWERED, CREATED, ERROR, LABELS, NO_ANSWER, NOT_SENT, ONLINE, PERM_CREATE, PERM_EXECUTE,
     QUEUED, RUNNING, SENT, SKIPPED, STALE, TODAY, CreateJob, Device, DispatchJob, LoadCfg, ScanJob, activity,
     by_priority, days_ago, find_by_name, now_utc,
 )
-from m2m_commands.stats import command_dir, device_rows, fmt_local, group_summary, merge_run, objects_table
+from m2m_commands.stats import (apply_history, command_dir, device_rows, fmt_local, group_summary, history_since,
+                                merge_run, objects_table)
 
 try:
     LOCAL_TZ = ZoneInfo("Europe/Kyiv")
@@ -614,6 +616,7 @@ def dispatch_tab() -> None:
         others = sum(c for t, c in variants if t != text)
         st.warning(f"На {n_obj(others, OBJ_LOC)} команда «{name}» має інший текст — їх не надсилаємо.")
 
+    auto_sync()  # щоб звірка знала про пізні відповіді
     prev: DispatchJob | None = S.prev_dispatch.get((gid, name, text))
 
     # активність об'єктів, на які в принципі можна надіслати цю команду
@@ -721,13 +724,59 @@ def persist(job: DispatchJob, store: GitHubStore | None) -> None:
     rows = job.snapshot()
     answered = sum(1 for r in rows if r["status"] == ANSWERED)
     msg = f"Статистика «{job.name}»: {job.group['name']} — відповіли {answered} з {job.dispatched}"
+    cache: dict = {"n": 0, "err": ""}
+
+    def mutate(doc):
+        doc = merge_run(doc, name=job.name, text=job.text, group=job.group, run_id=job.run_id,
+                        started_at=job.started_wall, rows=rows)
+        # пізні відповіді з історії сповіщень (і на цей, і на попередні запуски цієї команди)
+        since = history_since(doc)
+        if since is not None:
+            try:
+                if "items" not in cache or cache["since"] > since:
+                    cache["items"], cache["since"] = job.client.results_since(since), since
+                cache["n"] = apply_history(doc, cache["items"])
+            except ApiError as e:
+                cache["err"] = str(e)
+        return doc
+
     try:
-        store.update(command_dir(job.name, job.text),
-                     lambda doc: merge_run(doc, name=job.name, text=job.text, group=job.group, run_id=job.run_id,
-                                           started_at=job.started_wall, rows=rows), msg)
-        job.save_state = ("ok", f"Статистику збережено на GitHub (гілка {store.branch})", time.time())
+        store.update(command_dir(job.name, job.text), mutate, msg)
+        extra = f"; з історії сповіщень дозараховано відповідей: {cache['n']}" if cache["n"] else ""
+        if cache["err"]:
+            extra += f"; історію сповіщень прочитати не вдалося: {cache['err']}"
+        job.save_state = ("ok", f"Статистику збережено на GitHub (гілка {store.branch}){extra}", time.time())
     except GitHubError as e:
         job.save_state = ("error", str(e), time.time())
+
+
+def sync_history(store: GitHubStore, docs: dict[str, dict]) -> tuple[int, str]:
+    """Дозараховує в статистику відповіді з історії сповіщень (по всіх командах). Повертає (змін, помилка)."""
+    n, err = sync_docs(S.client, store, docs)
+    S.last_sync = time.time()
+    if n:
+        S.gh_docs = None
+    return n, err
+
+
+AUTO_SYNC_EVERY = 15 * 60  # с: не частіше, щоб не читати історію на кожен клік
+
+
+def auto_sync() -> None:
+    """Тихо звіряє статистику з історією, якщо востаннє це було давніше AUTO_SYNC_EVERY (і нічого не запущено)."""
+    store = get_store()
+    if store is None or any_running() or time.time() - S.get("last_sync", 0) < AUTO_SYNC_EVERY:
+        return
+    docs, source = load_docs(store)
+    if source != "github" or not docs:
+        S.last_sync = time.time()
+        return
+    with st.spinner("Звіряю статистику з історією сповіщень…"):
+        n, err = sync_history(store, docs)
+    if n:
+        st.toast(f"З історії сповіщень дозараховано відповідей: {n}")
+    if err:
+        S.sync_error = err
 
 
 def attach_persist(job: DispatchJob) -> None:
@@ -819,6 +868,7 @@ def tagged(name: str) -> bool:
 
 def stats_tab() -> None:
     store = get_store()
+    auto_sync()
     docs, source = load_docs(store)
     top1, top2 = st.columns([4, 1], vertical_alignment="center")
     if source == "github":
@@ -834,6 +884,19 @@ def stats_tab() -> None:
     if top2.button("Оновити", key="st_reload", width="stretch"):
         S.gh_docs = None
         st.rerun()
+    if source == "github" and docs:
+        h1, h2 = st.columns([4, 1], vertical_alignment="center")
+        h1.caption("Трекери часто відповідають пізніше, ніж ми чекаємо (команда чекає, поки трекер вийде на "
+                   "зв'язок). Кнопка дочитає всі «Результати команди» з історії сповіщень і зарахує їх.")
+        if h2.button("Підтягнути з історії", key="st_sync", width="stretch", disabled=any_running()):
+            with st.spinner("Читаю історію сповіщень…"):
+                n, err = sync_history(store, docs)
+            if err:
+                st.warning(err)
+            st.toast(f"Дозараховано відповідей: {n}" if n else "Нових відповідей в історії немає")
+            S.gh_docs = None
+            if n:
+                st.rerun()
     if not docs:
         st.info("Ще немає жодного запуску — нижче список груп, статистика з'явиться після першої відправки.")
         docs = {command_dir(DEFAULT_NAME, DEFAULT_TEXT): {"command": {"name": DEFAULT_NAME, "text": DEFAULT_TEXT},

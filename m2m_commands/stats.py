@@ -16,7 +16,10 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .jobs import ANSWERED, ERROR, LABELS, NO_ANSWER, NOT_SENT, SENT, SKIPPED, now_utc, parse_dt
+from datetime import timedelta
+
+from .jobs import (ANSWERED, ERROR, LABELS, NO_ANSWER, NOT_SENT, SENT, SKIPPED, clean_message, now_utc, parse_dt,
+                   result_device_id)
 
 try:
     TZ = ZoneInfo("Europe/Kyiv")
@@ -90,6 +93,47 @@ def merge_run(doc: dict | None, *, name: str, text: str, group: dict, run_id: st
     g["last_run_at"] = max((x["started_at"] for x in g["runs"].values() if x["started_at"]), default=None)
     doc["updated_at"] = _iso(now_utc())
     return doc
+
+
+def first_send(g: dict, rec: dict) -> datetime | None:
+    """Коли цьому об'єкту в цій групі вперше надсилали команду (початок найранішого запуску з відправкою)."""
+    starts = [parse_dt(g["runs"][r]["started_at"]) for r in rec.get("sent_runs", []) if r in g.get("runs", {})]
+    starts = [x for x in starts if x]
+    return min(starts) if starts else parse_dt(rec.get("last_sent"))
+
+
+def history_since(doc: dict) -> datetime | None:
+    """З якого моменту читати історію: найраніша відправка серед об'єктів, що ще не прийняли."""
+    out = [first_send(g, rec) for g in doc.get("groups", {}).values() for rec in g["devices"].values()
+           if not rec["accepted"] and rec.get("sent_runs")]
+    out = [x for x in out if x]
+    return min(out) - timedelta(minutes=2) if out else None
+
+
+def apply_history(doc: dict, items: list[dict], slack: timedelta = timedelta(minutes=2)) -> int:
+    """Зараховує «Результати команди» з історії об'єктам, яким надсилали команду і які ще не прийняли.
+    Відповідь рахується, якщо вона прийшла після першої відправки цієї команди на об'єкт. Повертає кількість змін."""
+    by_dev: dict[int, list] = {}
+    for it in items:
+        did, dt = result_device_id(it), parse_dt(it.get("createdAt"))
+        if did is not None and dt is not None:
+            by_dev.setdefault(did, []).append((dt, it))
+    changed = 0
+    for g in doc.get("groups", {}).values():
+        for did, rec in g["devices"].items():
+            if rec["accepted"] or not rec.get("sent_runs"):
+                continue
+            start = first_send(g, rec)
+            cands = sorted(((dt, it) for dt, it in by_dev.get(int(did), []) if start is None or dt >= start - slack),
+                           key=lambda x: x[0])
+            if cands:
+                dt, it = cands[0]
+                rec.update(accepted=True, status=ACCEPTED, detail="Зараховано з історії сповіщень",
+                           answer=clean_message(it.get("message")), answered_at=_iso(dt))
+                changed += 1
+    if changed:
+        doc["updated_at"] = _iso(now_utc())
+    return changed
 
 
 # ---------------------------------------------------------------- зведення

@@ -1,0 +1,36 @@
+# Щогодини дозараховує в статистику (гілка stats) пізні «Результати команди» з історії сповіщень M2M.
+# Лише читає M2M і пише в гілку stats; команд не створює й не надсилає. Застосунок на Streamlit не перезапускається.
+# Потрібні секрети репозиторію (Settings → Secrets and variables → Actions): M2M_EMAIL, M2M_PASSWORD.
+name: Звірка статистики з історією сповіщень
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # щогодини о :17 (UTC)
+  workflow_dispatch: {}    # ручний запуск з вкладки Actions
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-history
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests tzdata
+      - name: Звірка
+        env:
+          M2M_URL: https://my.m2m.eu
+          M2M_EMAIL: ${{ secrets.M2M_EMAIL }}
+          M2M_PASSWORD: ${{ secrets.M2M_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_BRANCH: stats
+        run: python -m m2m_commands.sync

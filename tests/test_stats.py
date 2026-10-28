@@ -118,3 +118,35 @@ def test_github_bad_token_and_main_branch_refused(gh):
         bad.head()
     with pytest.raises(GitHubError, match="main"):
         GitHubStore(TOKEN, fake.repo, "main", api=store.api)
+
+
+def test_late_answers_from_history_are_applied(gh):
+    """Пізня відповідь (після завершення очікування) зараховується зі звірки з історією; старі — ні."""
+    from m2m_commands.client import M2MClient
+    from m2m_commands.sync import sync_docs
+    from tests.fake_api import FakeM2M
+    fake, store = gh
+    api = FakeM2M(n_devices=3)
+    srv, url = api.serve()
+    cl = M2MClient(url)
+    cl.login("a@b.c", "demo123")
+    folder = command_dir(NAME, TEXT)
+    store.update(folder, lambda d: merge_run(d, name=NAME, text=TEXT, group=GROUP, run_id="r1", started_at=T0,
+                                             rows=RUN1), "stats")
+    # історія: стара відповідь до відправки (не рахується) і пізня після (рахується) для об'єкта 2
+    api.history = [
+        {"id": 1, "deviceId": 2, "message": "стара", "createdAt": (T0 - timedelta(hours=3)).isoformat()},
+        {"id": 2, "deviceId": 2, "message": 'TSYNC is now allowed <a href="#">x</a>',
+         "createdAt": (T0 + timedelta(minutes=40)).isoformat()},
+        {"id": 3, "deviceId": 4, "message": "не надсилали", "createdAt": (T0 + timedelta(minutes=5)).isoformat()},
+    ]
+    docs = {f: store.read_doc(f) for f in store.list_folders()}
+    n, err = sync_docs(cl, store, docs)
+    assert (n, err) == (1, "")
+    g = store.read_doc(folder)["groups"]["7"]
+    assert g["devices"]["2"]["accepted"] and g["devices"]["2"]["answer"] == "TSYNC is now allowed x"
+    assert not g["devices"]["4"]["accepted"]  # йому команду не надсилали
+    commits = len(fake.commits)
+    assert sync_docs(cl, store, {f: store.read_doc(f) for f in store.list_folders()}) == (0, "")
+    assert len(fake.commits) == commits  # нічого нового — без коміту
+    srv.shutdown()

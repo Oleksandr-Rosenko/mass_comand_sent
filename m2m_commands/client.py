@@ -233,6 +233,26 @@ class M2MClient:
                 break
         return [found[k] for k in sorted(found)]
 
+    def results_since(self, since, per_page: int = HISTORY_PER_PAGE, max_pages: int = 200) -> list[dict]:
+        """Усі «Результати команди», створені не раніше since (datetime з tz). Гортаємо від нових до старих,
+        поки сторінка не стане повністю старішою за since."""
+        from .jobs import parse_dt  # локальний імпорт: jobs імпортує client
+        first = self.history_page(1, per_page)
+        pages = max(first["pages"], 1)
+        ids = [int(i["id"]) for i in first["items"] if i.get("id") is not None]
+        ascending = len(ids) >= 2 and ids[0] < ids[-1]
+        order = list(range(pages, 0, -1) if ascending else range(1, pages + 1))[:max_pages]
+        out: dict = {}
+        for page in order:
+            chunk = first["items"] if page == 1 else self.history_page(page, per_page)["items"]
+            dates = [parse_dt(i.get("createdAt")) for i in chunk]
+            for it, dt in zip(chunk, dates):
+                if dt is not None and dt >= since:
+                    out[it.get("id") or id(it)] = it
+            if not chunk or all(dt is not None and dt < since for dt in dates):
+                break
+        return list(out.values())
+
     def latest_result_id(self) -> int:
         """Найбільший id у історії «Результат команди» — точка відліку перед відправкою."""
         first = self.history_page(1, HISTORY_PER_PAGE)
