@@ -51,18 +51,37 @@ def main() -> int:
     env = os.environ.get
     missing = [k for k in ("M2M_EMAIL", "M2M_PASSWORD", "GITHUB_TOKEN") if not env(k)]
     if missing:
-        print("Не задано: " + ", ".join(missing))
+        print("Не задано секрети: " + ", ".join(missing))
         return 2
-    client = M2MClient(env("M2M_URL") or "https://my.m2m.eu")
-    client.login(env("M2M_EMAIL"), env("M2M_PASSWORD"))
-    store = GitHubStore(env("GITHUB_TOKEN"), env("GITHUB_REPO") or "", env("GITHUB_BRANCH") or "stats",
-                        api=env("GITHUB_API") or "https://api.github.com")
-    ref = store.head()
-    docs = {f: d for f in store.list_folders(ref) if (d := store.read_doc(f, ref))}
+    url = env("M2M_URL") or "https://my.m2m.eu"
+    email = env("M2M_EMAIL").strip()
+    print(f"1/4 Вхід у M2M ({url}) як {email[:3]}***")
+    client = M2MClient(url)
+    try:
+        client.login(email, env("M2M_PASSWORD").strip())
+    except ApiError as e:
+        print(f"   Помилка входу: {e}. Перевірте M2M_EMAIL / M2M_PASSWORD (без лапок і пробілів); "
+              "якщо на акаунті увімкнена двофакторна перевірка — скрипт не зможе увійти.")
+        return 1
+    print("   OK")
+    print(f"2/4 Читаю статистику з GitHub ({env('GITHUB_REPO')}, гілка {env('GITHUB_BRANCH') or 'stats'})")
+    try:
+        store = GitHubStore(env("GITHUB_TOKEN"), env("GITHUB_REPO") or "", env("GITHUB_BRANCH") or "stats",
+                            api=env("GITHUB_API") or "https://api.github.com")
+        ref = store.head()
+        docs = {f: d for f in store.list_folders(ref) if (d := store.read_doc(f, ref))}
+    except GitHubError as e:
+        print(f"   Помилка GitHub: {e}")
+        return 1
+    print(f"   OK: команд у статистиці — {len(docs)}")
+    if not docs:
+        print("Статистики ще немає — нічого звіряти.")
+        return 0
+    print("3/4 Читаю історію «Результат команди» і звіряю")
     n, err = sync_docs(client, store, docs)
-    print(f"Дозараховано відповідей з історії: {n}")
+    print(f"4/4 Дозараховано відповідей з історії: {n}")
     if err:
-        print(err)
+        print(f"   Помилка: {err}")
         return 1
     return 0
 
