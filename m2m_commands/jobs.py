@@ -11,6 +11,7 @@ import math
 import re
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -163,6 +164,8 @@ class BaseJob:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self.on_finish = None   # callable(job) — викликається у фоновому потоці після завершення
+        self.finish_error = ""
 
     @property
     def running(self) -> bool:
@@ -212,6 +215,11 @@ class BaseJob:
             self.status, self.message = "error", f"{type(e).__name__}: {e}"
         finally:
             self.finished_at = time.time()
+            if self.on_finish:
+                try:
+                    self.on_finish(self)
+                except Exception as e:  # noqa: BLE001
+                    self.finish_error = f"{type(e).__name__}: {e}"
 
     def _run(self) -> None:  # pragma: no cover — перевизначається
         raise NotImplementedError
@@ -412,6 +420,8 @@ class DispatchJob(BaseJob):
         self.group, self.name, self.text = group, name, text
         self.wait_minutes, self.poll_every = wait_minutes, max(3.0, poll_every)
         self.online_min = online_min
+        self.run_id = uuid.uuid4().hex[:12]
+        self.save_state: tuple[str, str, float] = ("", "", 0.0)  # (ok|error|saving|local, текст, час)
         self.activity_every = activity_every
         self.activity_checked: float | None = None
         self.activity_error = ""

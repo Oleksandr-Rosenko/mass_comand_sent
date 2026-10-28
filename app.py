@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import html
+import threading
+import time
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -12,11 +14,13 @@ import streamlit as st
 
 from m2m_commands.client import NAME_MAX, TEXT_MAX, M2MClient
 from m2m_commands.errors import ApiError
+from m2m_commands.github_store import GitHubError, GitHubStore
 from m2m_commands.jobs import (
     ACTIVITY_LABELS, ANSWERED, CREATED, ERROR, LABELS, NO_ANSWER, NOT_SENT, ONLINE, PERM_CREATE, PERM_EXECUTE,
     QUEUED, RUNNING, SENT, SKIPPED, STALE, TODAY, CreateJob, Device, DispatchJob, LoadCfg, ScanJob, activity,
     by_priority, find_by_name, now_utc,
 )
+from m2m_commands.stats import command_dir, device_rows, fmt_local, group_summary, merge_run, objects_table
 
 try:
     LOCAL_TZ = ZoneInfo("Europe/Kyiv")
@@ -55,6 +59,7 @@ STATUS_COLORS = {
     LABELS[ERROR]: ("#FDE2E1", "#9B1C1C"), LABELS[NO_ANSWER]: ("#FDE2E1", "#9B1C1C"),
     LABELS[SENT]: ("#FFF1CC", "#6E4600"), LABELS[QUEUED]: ("#FFF1CC", "#6E4600"),
     LABELS[RUNNING]: ("#E1EEFB", "#155A91"),
+    "Так": ("#DFF3E4", "#14632B"), "Ні": ("#FDE2E1", "#9B1C1C"),
 }
 
 
@@ -497,7 +502,8 @@ def dispatch_tab() -> None:
     name_counts = dict(names)
     default = S.get("last_name") or S.get("c_name", "").strip()
     idx = next((i for i, (n, _) in enumerate(names) if n == default), 0)
-    name = st.selectbox("Команда", [n for n, _ in names], index=idx, key=f"d_cmd_{gid}",
+    # ключ залежить від щойно створеної команди: після створення вона вибирається автоматично
+    name = st.selectbox("Команда", [n for n, _ in names], index=idx, key=f"d_cmd_{gid}_{default}_{len(names)}",
                         format_func=lambda n: f"{n} — є на {fmt_n(name_counts[n])} з {n_obj(len(devices))}")
     variants = scan.variants(name)
     if len(variants) == 1:
@@ -512,8 +518,6 @@ def dispatch_tab() -> None:
         st.warning(f"На {n_obj(others, OBJ_LOC)} команда «{name}» має інший текст — їх не надсилаємо.")
 
     prev: DispatchJob | None = S.prev_dispatch.get((gid, name, text))
-    if S.runs.get((gid, name, text)):
-        stats_section(gid, name, text, "df")
 
     # активність об'єктів, на які в принципі можна надіслати цю команду
     st.markdown("**Активність об'єктів з цією командою**")
@@ -563,6 +567,7 @@ def dispatch_tab() -> None:
                           activity_every=ACTIVITY_EVERY_S)
         S.dispatch_job, S.dispatch_stage = job, "progress"
         register_run(job)
+        attach_persist(job)
         job.start()
         st.rerun()
     if reasons:
@@ -574,74 +579,169 @@ def register_run(job: DispatchJob) -> None:
     S.runs.setdefault((job.group["id"], job.name, job.text), []).append(job)
 
 
-_RANK = {ANSWERED: 6, SENT: 5, RUNNING: 5, QUEUED: 5, NO_ANSWER: 4, ERROR: 3, NOT_SENT: 2, SKIPPED: 1}
+# ---------------------------------------------------------------- статистика: збереження на GitHub
+DEFAULT_REPO = "Oleksandr-Rosenko/mass_comand_sent"
 
 
-def stats_rows(gid: int, name: str, text: str) -> list[dict]:
-    """По кожному об'єкту групи: чи застосована команда (трекер відповів) у будь-якому із запусків цієї сесії."""
-    runs: list[DispatchJob] = S.runs.get((gid, name, text), [])
-    snaps = [{r["id"]: r for r in j.snapshot()} for j in runs]
-    scan: ScanJob | None = S.scans.get(gid)
-    out = []
-    for d in S.devices.get(gid, []):
-        rows = [s[d.id] for s in snaps if d.id in s]
-        sent = [r for r in rows if r["sent_at"]]
-        best = max(rows, key=lambda r: (_RANK.get(r["status"], 0), r["answered_at"] or r["sent_at"] or now_utc()),
-                   default=None)
-        if best is not None and best["status"] == ANSWERED:
-            applied, status = "Так", "Відповів"
-        elif best is not None and best["status"] != SKIPPED:
-            applied = "Ні"
-            status = {NO_ANSWER: "Без відповіді", ERROR: "Помилка відправки", NOT_SENT: "Не надіслано (зупинено)"}.get(
-                best["status"], "Чекаємо відповідь")
-        else:
-            applied = "Ні"
-            same = find_by_name(scan.commands.get(d.id, []), name) if scan else []
-            if best is not None:
-                status = best["detail"]
-            elif scan and d.id in scan.errors:
-                status = "Не вдалося прочитати команди"
-            elif scan and not same:
-                status = f"Немає команди «{name}»"
-            elif same and not any(c.text == text for c in same):
-                status = f"Інший текст команди «{name}»"
-            else:
-                status = "Не надсилали"
-        detail = ""
-        if best is not None and best["status"] != ANSWERED and best["status"] != SKIPPED:
-            detail = best["detail"]
-        out.append({
-            "Об'єкт": d.name, "IMEI": d.imei, "ID об'єкта": d.id, "Застосовано": applied, "Статус": status,
-            "Відповідь трекера": best["answer"] if best else "", "Коли відповів": fmt_time(best["answered_at"], True)
-            if best and best["answered_at"] else "", "Останнє надсилання": fmt_time(max(r["sent_at"] for r in sent), True)
-            if sent else "", "Скільки разів надсилали": len(sent), "Деталі": detail,
-            "Останнє повідомлення": fmt_time(last, True) if (last := max(
-                [x for x in [d.last_message, *(r["last_message"] for r in rows)] if x], default=None)) else "",
-        })
-    return out
+def github_token() -> str:
+    """Токен із Secrets: GITHUB_TOKEN (або GH_TOKEN, github_token, [github] token)."""
+    for key in ("GITHUB_TOKEN", "GH_TOKEN", "github_token", "GITHUB_PAT"):
+        if secret(key).strip():
+            return secret(key).strip()
+    try:
+        return str(st.secrets.get("github", {}).get("token", "")).strip()
+    except Exception:  # noqa: BLE001
+        return ""
 
 
-def stats_section(gid: int, name: str, text: str, key: str, disabled: bool = False) -> None:
-    """Підсумок «застосовано / ні» по групі за всі запуски цієї команди + CSV зі списком."""
-    rows = stats_rows(gid, name, text)
-    if not rows:
+def get_store() -> GitHubStore | None:
+    """Сховище статистики на GitHub або None, якщо токен не задано (тоді статистика лише в сесії)."""
+    token = github_token()
+    if not token:
+        return None
+    try:
+        return GitHubStore(token, secret("GITHUB_REPO", DEFAULT_REPO), secret("GITHUB_BRANCH", "stats"),
+                           api=secret("GITHUB_API", "https://api.github.com"))
+    except GitHubError as e:
+        S.gh_error = str(e)
+        return None
+
+
+def persist(job: DispatchJob, store: GitHubStore | None) -> None:
+    """Дописує результати запуску в статистику на GitHub. Працює у фоновому потоці (без session_state)."""
+    if store is None:
+        job.save_state = ("local", "Статистика лише в цій сесії: GITHUB_TOKEN у Secrets не задано", time.time())
         return
-    runs = len(S.runs.get((gid, name, text), []))
-    yes = sum(1 for r in rows if r["Застосовано"] == "Так")
-    no_answer = sum(1 for r in rows if r["Статус"] in ("Без відповіді", "Помилка відправки", "Не надіслано (зупинено)"))
-    rest = len(rows) - yes - no_answer
-    with st.container(border=True):
-        s1, s2 = st.columns([3, 2], vertical_alignment="center")
-        s1.markdown(f"**Статистика по групі «{group_by_id(gid)['name']}» · «{name}»**  \n"
-                    f"<span style='font-size:14px;color:#555A66'>Застосовано на <b style='color:#14632B'>"
-                    f"{fmt_n(yes)}</b> з {n_obj(len(rows), OBJ_LOC)} · без відповіді або помилка — {fmt_n(no_answer)}"
-                    f" · не надсилали або немає команди — {fmt_n(rest)} · запусків: {runs}</span>",
-                    unsafe_allow_html=True)
-        s2.download_button("Статистика по групі (CSV)", csv_bytes(pd.DataFrame(rows)), width="stretch",
-                           file_name=f"stats_{name}_{group_by_id(gid)['name']}_{datetime.now(LOCAL_TZ):%Y%m%d_%H%M}.csv",
-                           mime="text/csv", key=f"{key}_stats", disabled=disabled,
-                           help="Кожен об'єкт групи: застосовано (трекер відповів) чи ні і чому — "
-                                "зведено з усіх запусків цієї команди в поточній сесії")
+    job.save_state = ("saving", "Зберігаю статистику на GitHub…", time.time())
+    rows = job.snapshot()
+    answered = sum(1 for r in rows if r["status"] == ANSWERED)
+    msg = f"Статистика «{job.name}»: {job.group['name']} — відповіли {answered} з {job.dispatched}"
+    try:
+        store.update(command_dir(job.name, job.text),
+                     lambda doc: merge_run(doc, name=job.name, text=job.text, group=job.group, run_id=job.run_id,
+                                           started_at=job.started_wall, rows=rows), msg)
+        job.save_state = ("ok", f"Статистику збережено на GitHub (гілка {store.branch})", time.time())
+    except GitHubError as e:
+        job.save_state = ("error", str(e), time.time())
+
+
+def attach_persist(job: DispatchJob) -> None:
+    store = get_store()
+    job.save_state = ("pending", "Статистика збережеться після завершення запуску", time.time())
+    job.on_finish = lambda j: persist(j, store)
+
+
+def persist_async(job: DispatchJob) -> None:
+    job.save_state = ("saving", "Зберігаю статистику на GitHub…", time.time())
+    threading.Thread(target=persist, args=(job, get_store()), daemon=True).start()
+
+
+def save_status(job: DispatchJob) -> None:
+    state, msg, at = job.save_state
+    when = datetime.fromtimestamp(at).astimezone(LOCAL_TZ).strftime("%H:%M:%S") if at else ""
+    if state == "ok":
+        st.caption(f"{msg} о {when} — дивіться вкладку «3 · Статистика».")
+    elif state == "error":
+        c1, c2 = st.columns([3, 1], vertical_alignment="center")
+        c1.warning(f"Статистику не збережено: {msg}")
+        if c2.button("Зберегти ще раз", key="d_save_retry", width="stretch"):
+            persist_async(job)
+            st.rerun()
+    elif state in ("saving", "pending", "local"):
+        st.caption(msg)
+
+
+def local_docs() -> dict[str, dict]:
+    """Статистика лише із запусків цієї сесії (коли GitHub не налаштовано або недоступний)."""
+    docs: dict[str, dict] = {}
+    for (_, name, text), jobs in S.runs.items():
+        folder = command_dir(name, text)
+        for j in jobs:
+            docs[folder] = merge_run(docs.get(folder), name=name, text=text, group=j.group, run_id=j.run_id,
+                                     started_at=j.started_wall, rows=j.snapshot())
+    return docs
+
+
+def load_docs(store: GitHubStore | None) -> tuple[dict[str, dict], str]:
+    if store is None:
+        return local_docs(), "local"
+    saved = max((j.save_state[2] for js in S.runs.values() for j in js if j.save_state[0] == "ok"), default=0)
+    if S.get("gh_docs") is None or S.get("gh_loaded_at", 0) < saved:
+        try:
+            with st.spinner("Читаю статистику з GitHub…"):
+                ref = store.head()
+                S.gh_docs = {f: d for f in store.list_folders(ref) if (d := store.read_doc(f, ref))}
+            S.gh_loaded_at, S.gh_error = time.time(), ""
+        except GitHubError as e:
+            S.gh_docs, S.gh_error = None, str(e)
+    if S.get("gh_docs") is None:
+        return local_docs(), "error"
+    return S.gh_docs, "github"
+
+
+def stats_tab() -> None:
+    store = get_store()
+    docs, source = load_docs(store)
+    top1, top2 = st.columns([4, 1], vertical_alignment="center")
+    if source == "github":
+        loaded = datetime.fromtimestamp(S.gh_loaded_at).astimezone(LOCAL_TZ).strftime("%H:%M:%S")
+        url = f"https://github.com/{store.repo}/tree/{store.branch}/stats"
+        top1.caption(f"Дані з GitHub, гілка `{store.branch}` · прочитано о {loaded} · [відкрити на GitHub]({url}). "
+                     "Оновлюються автоматично після кожного запуску.")
+    elif source == "error":
+        top1.warning(f"Не вдалося прочитати статистику з GitHub: {S.gh_error}. Нижче — лише запуски з цієї сесії.")
+    else:
+        top1.info("Статистика зараз лише в межах цієї сесії. Щоб вона зберігалась на GitHub і оновлювалась після "
+                  "кожного запуску, додайте GITHUB_TOKEN у Secrets застосунку (інструкція в README).")
+    if top2.button("Оновити", key="st_reload", width="stretch"):
+        S.gh_docs = None
+        st.rerun()
+    if not docs:
+        st.info("Ще немає жодного запуску. Статистика з'явиться після першої відправки на вкладці «2».")
+        return
+
+    keys = list(docs)
+    labels = {k: f"{docs[k]['command']['name']} — {docs[k]['command']['text']}" for k in keys}
+    want = command_dir(S.get("last_name") or S.get("c_name", ""), S.get("c_text", ""))
+    if len(keys) > 1:
+        folder = st.selectbox("Команда", keys, index=keys.index(want) if want in keys else 0, format_func=labels.get,
+                              key="st_cmd")
+    else:
+        folder = keys[0]
+        st.markdown(f"**Команда:** {html.escape(docs[folder]['command']['name'])} · "
+                    f"`{docs[folder]['command']['text']}`")
+    doc = docs[folder]
+    name = doc["command"]["name"]
+    checked = sorted(doc["groups"].items(), key=lambda kv: kv[1].get("last_run_at") or "", reverse=True)
+    sums = {gid: group_summary(g) for gid, g in checked}
+    total_obj = sum(x["objects"] for x in sums.values())
+    total_acc = sum(x["accepted"] for x in sums.values())
+    unchecked = [g for g in S.groups if str(g["id"]) not in doc["groups"]]
+    m = st.columns(3)
+    m[0].metric("Груп перевірено", f"{fmt_n(len(checked))} з {fmt_n(len(checked) + len(unchecked))}", border=True)
+    m[1].metric("Об'єктів у перевірених групах", fmt_n(total_obj), border=True)
+    m[2].metric("Прийняли команду", f"{fmt_n(total_acc)}" + (f" ({total_acc / total_obj * 100:.0f}%)"
+                                                             if total_obj else ""), border=True)
+
+    for gid, g in checked:
+        x = sums[gid]
+        label = (f"**{g['name']}** · {n_obj(x['objects'])} · :green[прийняли {fmt_n(x['accepted'])}] з "
+                 f"{fmt_n(x['objects'])} ({x['percent']}%) · перевірено {fmt_local(x['last_run_at'])}")
+        with st.expander(label):
+            rows = device_rows(g)
+            df = pd.DataFrame(rows)
+            st.dataframe(styled(df, "Прийняв"), hide_index=True, width="stretch",
+                         height=min(420, 40 + 35 * max(1, len(rows))))
+            c1, c2 = st.columns([3, 1], vertical_alignment="center")
+            c1.caption(f"Спершу ті, що прийняли, потім ті, що ні. Запусків на цій групі: {x['runs']}.")
+            c2.download_button("CSV групи", csv_bytes(df), width="stretch", key=f"st_csv_{gid}",
+                               file_name=f"{name}_{g['name']}_{datetime.now(LOCAL_TZ):%Y%m%d}.csv", mime="text/csv")
+    for g in unchecked:
+        with st.expander(f"**{g['name']}** · {n_obj(len(g['deviceIds']))} · :gray[не перевірялась]"):
+            st.caption(f"Команду «{name}» на цій групі ще не запускали.")
+    st.download_button("Завантажити всю статистику (CSV)", csv_bytes(pd.DataFrame(objects_table(doc))),
+                       key="st_csv_all", file_name=f"{name}_усі_групи_{datetime.now(LOCAL_TZ):%Y%m%d}.csv",
+                       mime="text/csv")
 
 
 def resend(job: DispatchJob) -> None:
@@ -658,11 +758,12 @@ def resend(job: DispatchJob) -> None:
     S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
     S.dispatch_job = new
     register_run(new)
+    attach_persist(new)
     new.start()
 
 
 def dispatch_progress(job: DispatchJob) -> None:
-    run_every = 1 if job.running else None
+    run_every = 1 if job.running or job.save_state[0] in ("pending", "saving") else None
 
     @st.fragment(run_every=run_every)
     def live() -> None:
@@ -736,7 +837,7 @@ def dispatch_progress(job: DispatchJob) -> None:
                            f"не надіслано або помилка — {fmt_n(errors)}.")
             elif sent:
                 st.success(f"Усі {n_obj(answered)} відповіли.")
-        stats_section(job.group["id"], job.name, job.text, "dp", disabled=job.running)
+        save_status(job)
 
         b = st.columns(4)
         if job.running and job.phase in ("idle", "baseline", "sending"):
@@ -750,6 +851,9 @@ def dispatch_progress(job: DispatchJob) -> None:
                 with st.spinner("Читаю історію сповіщень…"):
                     got = job.poll()
                 st.toast(f"Нових відповідей: {got}")
+                if got:
+                    persist_async(job)  # дописати пізні відповіді в статистику
+                    st.rerun()
         retry_n = len(job.not_answered())
         if b[1].button(f"Ще раз — без відповіді ({fmt_n(retry_n)})", width="stretch",
                        disabled=job.running or not retry_n, key="d_resend",
@@ -788,7 +892,7 @@ def dispatch_progress(job: DispatchJob) -> None:
         keep = filters.get(flt or "all", filters["all"])[1]
         view = df[[keep is None or r["status"] in keep for r in rows]] if len(df) else df
         st.dataframe(styled(view), hide_index=True, width="stretch", height=460)
-        if run_every and not job.running:
+        if run_every and not job.running and job.save_state[0] not in ("pending", "saving"):
             S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
             st.rerun()
 
@@ -801,8 +905,10 @@ if S.client is None or not S.client.token:
 else:
     sidebar()
     st.title("Масові команди")
-    t1, t2 = st.tabs(["1 · Створення команди", "2 · Відправка і результати"])
+    t1, t2, t3 = st.tabs(["1 · Створення команди", "2 · Відправка і результати", "3 · Статистика"])
     with t1:
         create_tab()
     with t2:
         dispatch_tab()
+    with t3:
+        stats_tab()
