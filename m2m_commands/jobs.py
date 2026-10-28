@@ -404,12 +404,18 @@ class DispatchJob(BaseJob):
 
     def __init__(self, client: M2MClient, group: dict, name: str, text: str,
                  targets: list[tuple[Device, int]], skipped: list[tuple[Device, str]], cfg: LoadCfg,
-                 wait_minutes: float = 15, poll_every: float = 15, online_min: float = 10):
-        """targets надсилаються в переданому порядку (для пріоритету — відсортуйте by_priority)."""
+                 wait_minutes: float = 15, poll_every: float = 15, online_min: float = 10,
+                 activity_every: float = 60):
+        """targets надсилаються в переданому порядку (для пріоритету — відсортуйте by_priority).
+        activity_every — як часто під час очікування перечитувати «останнє повідомлення» об'єктів, с."""
         super().__init__(client, cfg)
         self.group, self.name, self.text = group, name, text
         self.wait_minutes, self.poll_every = wait_minutes, max(3.0, poll_every)
         self.online_min = online_min
+        self.activity_every = activity_every
+        self.activity_checked: float | None = None
+        self.activity_error = ""
+        self._act_lock = threading.Lock()
         self.phase = "idle"   # idle | baseline | sending | waiting | done
         self.baseline_id: int | None = None
         self.last_id = 0
@@ -510,6 +516,38 @@ class DispatchJob(BaseJob):
                     got += 1
             return got
 
+    # ---- чи виходять на зв'язок ті, хто ще не відповів
+    @staticmethod
+    def woke(r: dict) -> bool:
+        """Об'єкт надсилав повідомлення вже після того, як ми відправили йому команду."""
+        return bool(r["sent_at"] and r["last_message"] and r["last_message"] > r["sent_at"])
+
+    def refresh_activity(self) -> bool:
+        """Перечитує «останнє повідомлення» об'єктів групи (один запит на всю групу)."""
+        with self._act_lock:
+            try:
+                devices = self.client.group_devices(self.group["id"])
+                self.activity_error = ""
+            except ApiError as e:
+                self.activity_error = f"Не вдалося оновити «останнє повідомлення»: {e}"
+                return False
+            self.activity_checked = time.time()
+            fresh = {int(d["id"]): parse_dt(d.get("lastMessageDate") or d.get("lastUpdate"))
+                     for d in devices if d.get("id") is not None}
+            with self._lock:
+                for did, r in self.rows.items():
+                    lm = fresh.get(did)
+                    if lm and (r["last_message"] is None or lm > r["last_message"]):
+                        r["last_message"] = lm
+            return True
+
+    def waiting_summary(self) -> dict[str, int]:
+        """Серед тих, хто ще не відповів: скільки вийшли на зв'язок після відправки, а скільки мовчать."""
+        with self._lock:
+            waiting = [r for r in self.rows.values() if r["status"] == SENT]
+            woke = sum(1 for r in waiting if self.woke(r))
+        return {"waiting": len(waiting), "woke": woke, "silent": len(waiting) - woke}
+
     def _pending_answers(self) -> int:
         return self.counts().get(SENT, 0)
 
@@ -534,17 +572,26 @@ class DispatchJob(BaseJob):
         self.phase = "waiting"
         self.wait_started = time.time()
         self.wait_until = self.wait_started + self.wait_minutes * 60
+        self.activity_checked = self.wait_started  # перше оновлення активності — через activity_every
         while not self._stop_wait.is_set():
             self.poll()
             if self._pending_answers() == 0 or time.time() >= self.wait_until:
                 break
+            if self.activity_every and time.time() - (self.activity_checked or 0) >= self.activity_every:
+                self.refresh_activity()
             self._stop_wait.wait(min(self.poll_every, max(0.5, self.wait_until - time.time())))
         reason = "Очікування зупинено" if self._stop_wait.is_set() else f"Немає відповіді за {self.wait_minutes:g} хв"
+        has_fresh = self._pending_answers() > 0 and self.refresh_activity()  # остаточний стан для звіту
         with self._lock:
             for r in self.rows.values():
                 if r["status"] == SENT:
                     r["status"] = NO_ANSWER
-                    r["detail"] = r["detail"] or reason
+                    if has_fresh:
+                        woke = "виходив на зв'язок, але не відповів" if self.woke(r) else "на зв'язок не виходив"
+                        reason_r = f"{reason} · {woke}"
+                    else:
+                        reason_r = reason
+                    r["detail"] = r["detail"] or reason_r
         self.phase = "done"
         if self._stop_wait.is_set() or self._stop.is_set():
             self.status = "stopped"

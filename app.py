@@ -300,6 +300,9 @@ def sidebar() -> None:
         st.number_input("Паралельних запитів у пачці", 1, 10, 4, key="cfg_workers", disabled=busy)
         st.number_input("Повторів при помилці 5xx", 0, 5, 2, key="cfg_retries", disabled=busy)
         st.number_input("Опитувати відповіді кожні, с", 5, 120, 15, key="cfg_poll", disabled=busy)
+        st.number_input("Оновлювати «останнє повідомлення» кожні, хв", 0.5, 15.0, 1.0, step=0.5, key="cfg_act",
+                        disabled=busy, help="Під час очікування: один запит на всю групу, щоб бачити, чи виходять "
+                                            "на зв'язок ті, хто ще не відповів")
         client.retries = int(S.get("cfg_retries", 2))
         gid = S.get("g_create") or S.get("g_dispatch")
         if busy:
@@ -564,7 +567,8 @@ def dispatch_tab() -> None:
     if b1.button(f"Надіслати на {n_obj(len(targets))}", type="primary", width="stretch",
                  disabled=not targets or any_running()):
         job = DispatchJob(S.client, group_by_id(gid), name, text, targets, skipped, load_cfg(),
-                          wait_minutes=float(wait), poll_every=float(S.get("cfg_poll", 15)), online_min=online_min)
+                          wait_minutes=float(wait), poll_every=float(S.get("cfg_poll", 15)), online_min=online_min,
+                          activity_every=float(S.get("cfg_act", 1.0)) * 60)
         S.dispatch_job, S.dispatch_stage = job, "progress"
         register_run(job)
         job.start()
@@ -619,7 +623,8 @@ def stats_rows(gid: int, name: str, text: str) -> list[dict]:
             "Відповідь трекера": best["answer"] if best else "", "Коли відповів": fmt_time(best["answered_at"], True)
             if best and best["answered_at"] else "", "Останнє надсилання": fmt_time(max(r["sent_at"] for r in sent), True)
             if sent else "", "Скільки разів надсилали": len(sent), "Деталі": detail,
-            "Останнє повідомлення": fmt_time(d.last_message, True) if d.last_message else "",
+            "Останнє повідомлення": fmt_time(last, True) if (last := max(
+                [x for x in [d.last_message, *(r["last_message"] for r in rows)] if x], default=None)) else "",
         })
     return out
 
@@ -657,7 +662,7 @@ def resend(job: DispatchJob) -> None:
         targets.append((dev, int(r["command_id"])))
     new = DispatchJob(S.client, job.group, job.name, job.text, by_priority(targets), [], load_cfg(),
                       wait_minutes=job.wait_minutes, poll_every=float(S.get("cfg_poll", 15)),
-                      online_min=job.online_min)
+                      online_min=job.online_min, activity_every=float(S.get("cfg_act", 1.0)) * 60)
     S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
     S.dispatch_job = new
     register_run(new)
@@ -702,6 +707,26 @@ def dispatch_progress(job: DispatchJob) -> None:
             if parts:
                 st.markdown("<div style='font-size:14px;color:#555A66'>Відповіли за активністю: "
                             + " &nbsp;·&nbsp; ".join(parts) + "</div>", unsafe_allow_html=True)
+            if job.phase == "waiting":
+                ws = job.waiting_summary()
+                if ws["waiting"]:
+                    checked = (fmt_time(datetime.fromtimestamp(job.activity_checked).astimezone(LOCAL_TZ))
+                               if job.activity_checked and job.activity_checked > (job.wait_started or 0) else "ще ні")
+                    w1, w2 = st.columns([3, 1], vertical_alignment="center")
+                    w1.markdown(
+                        f"<div style='font-size:14px;color:#555A66'>Із тих, хто чекає ({fmt_n(ws['waiting'])}): "
+                        f"<b style='color:#1E7A43'>вийшли на зв'язок після відправки — {fmt_n(ws['woke'])}</b>, "
+                        f"мовчать — {fmt_n(ws['silent'])} · «останнє повідомлення» оновлено: {checked}"
+                        f" (кожні {job.activity_every / 60:g} хв)</div>", unsafe_allow_html=True)
+                    if w2.button("Оновити зараз", key="d_act_now", width="stretch"):
+                        job.refresh_activity()
+                    waited_min = ((job.wait_minutes * 60) - (job.wait_left or 0)) / 60
+                    if ws["woke"] == 0 and checked != "ще ні" and waited_min >= 2:
+                        st.info("Ніхто з тих, хто чекає, після відправки на зв'язок не виходив — чекати далі, "
+                                "найімовірніше, немає сенсу. Можна натиснути «Зупинити очікування», а коли вони "
+                                "з'являться онлайн — «Ще раз — без відповіді».")
+                if job.activity_error:
+                    st.caption(job.activity_error)
         m = st.columns(4)
         m[0].metric("Надіслано", fmt_n(sent), border=True)
         m[1].metric("Відповіли", fmt_n(answered), border=True)
@@ -745,7 +770,9 @@ def dispatch_progress(job: DispatchJob) -> None:
         df = pd.DataFrame([{
             "№": str(r["order"] or ""), "Об'єкт": r["name"], "Активність": act_label(r["activity"]),
             "Останнє повідомлення": ago(r["last_message"]), "Надіслано": fmt_time(r["sent_at"]),
-            "Статус": LABELS[r["status"]], "Відповідь трекера / деталі": r["answer"] or r["detail"],
+            "Статус": LABELS[r["status"]], "Відповідь трекера / деталі": r["answer"] or r["detail"] or (
+                ("Вийшов на зв'язок після відправки — відповіді ще немає" if DispatchJob.woke(r)
+                 else "Після відправки на зв'язок не виходив") if r["status"] == SENT else ""),
             "Отримано": fmt_time(r["answered_at"]), "IMEI": r["imei"],
         } for r in rows])
         b[2].download_button("Завантажити звіт CSV", csv_bytes(df), width="stretch", disabled=job.running,

@@ -164,7 +164,35 @@ def test_stop_waiting():
     job.wait(10)
     assert job.status == "stopped"
     assert job.counts().get(NO_ANSWER) == 4
-    assert job.rows[1]["detail"] == "Очікування зупинено"
+    assert job.rows[1]["detail"].startswith("Очікування зупинено")
+    srv.shutdown()
+
+
+def test_waiting_shows_who_came_online():
+    """Під час очікування перечитуємо «останнє повідомлення»: видно, хто вийшов на зв'язок, але не відповів."""
+    from datetime import datetime, timezone
+    api = FakeM2M(n_devices=3, have_cmd=(1, 2, 3), silent=(1, 2, 3))
+    cl, srv = connect(api)
+    devs = {d.id: d for d in devices_of(cl)}
+    targets = [(devs[i], api.commands[i][-1]["id"]) for i in (1, 2, 3)]
+    job = DispatchJob(cl, {"id": 7, "name": "Г"}, NAME, TEXT, targets, [], LoadCfg(pause=0), wait_minutes=0.1,
+                      activity_every=0.5)
+    job.poll_every = 0.3
+    job.start()
+    for _ in range(100):
+        if job.phase == "waiting":
+            break
+        time.sleep(0.05)
+    time.sleep(0.2)
+    api.devices[2]["lastMessageDate"] = datetime.now(timezone.utc).isoformat()  # об'єкт 2 «прокинувся»
+    for _ in range(40):
+        if job.waiting_summary()["woke"] == 1:
+            break
+        time.sleep(0.1)
+    assert job.waiting_summary() == {"waiting": 3, "woke": 1, "silent": 2}
+    job.wait(30)
+    assert "виходив на зв'язок, але не відповів" in job.rows[2]["detail"]
+    assert "на зв'язок не виходив" in job.rows[1]["detail"]
     srv.shutdown()
 
 
