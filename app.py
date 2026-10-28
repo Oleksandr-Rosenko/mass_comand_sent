@@ -43,7 +43,7 @@ st.markdown(
 S = st.session_state
 for k, v in {"client": None, "groups": [], "devices": {}, "scans": {}, "create_job": None, "create_stage": "form",
              "dispatch_job": None, "dispatch_stage": "form", "prev_dispatch": {}, "runs": {}, "last_name": "",
-             "d_wait": 15, "d_online": 10, "d_priority": True,
+             "d_wait": 15, "d_online": 5, "d_priority": True,
              "d_skip_acc": True}.items():
     S.setdefault(k, v)
 # Streamlit забуває значення полів, які в цьому проході не намальовані (напр., форма під час прогресу).
@@ -195,7 +195,7 @@ def styled(df: pd.DataFrame, col: str = "Статус"):
         return df
 
     def paint(v):
-        bg, fg = STATUS_COLORS.get(v, ("", ""))
+        bg, fg = STATUS_COLORS.get(str(v).split(" · ")[0], ("", ""))
         return f"background-color: {bg}; color: {fg}; font-weight: 600" if bg else ""
 
     def paint_act(v):
@@ -237,13 +237,20 @@ def activity_bar(counts: dict[str, int], online_min: int) -> None:
 
 # Ширина колонок у таблицях: вузькі службові колонки компактні, текст відповіді — широкий.
 COL_WIDTHS = {
-    "№": 40, "Прийняв": 70, "Статус": 110, "Об'єкт": 140, "IMEI": 135, "Останнє повідомлення": 175,
-    "Надіслано → відповів": 135, "Коли відповів": 105, "Надсилали": 80,
+    "№": 36, "Прийняв": 64, "Статус": 140, "Об'єкт": 115, "IMEI": 125, "Останнє повідомлення": 150,
+    "Коли відповів": 105, "Надсилали": 72, "Деталі": 260,
+    "Відповідь трекера / деталі": 330, "Відповідь / причина": 330,
 }
 
 
 def col_cfg(df: pd.DataFrame) -> dict:
     return {c: st.column_config.Column(width=w) for c, w in COL_WIDTHS.items() if c in df.columns}
+
+
+def drop_empty(df: pd.DataFrame, cols=("IMEI",)) -> pd.DataFrame:
+    """Ховає колонки, порожні в усіх рядках (напр., IMEI, якщо API його не віддає)."""
+    empty = [c for c in cols if c in df.columns and len(df) and not df[c].astype(str).str.strip().astype(bool).any()]
+    return df.drop(columns=empty) if empty else df
 
 
 def csv_bytes(df: pd.DataFrame) -> bytes:
@@ -428,7 +435,7 @@ def create_tab() -> None:
                 rows.append({"Об'єкт": d.name, "IMEI": d.imei, "Останнє повідомлення": last_seen(d.last_message),
                              f"Право «{PERM_CREATE}»": {True: "Є", False: "Немає"}.get(d.can_create, "—"),
                              f"Команда «{name}»" if name else "Команда": state})
-            dfo = pd.DataFrame(rows)
+            dfo = drop_empty(pd.DataFrame(rows))
             st.dataframe(dfo, hide_index=True, width="stretch", height=360, column_config=col_cfg(dfo))
 
     ready = bool(name and text.strip()) and bool(allowed) and not any_running()
@@ -491,8 +498,8 @@ def create_progress(job: CreateJob) -> None:
                 go_to(1, job.group["id"], job.name, job.text)
 
         rows = job.snapshot()
-        df = pd.DataFrame([{"Об'єкт": r["name"], "IMEI": r["imei"], "Статус": LABELS[r["status"]],
-                            "Деталі": r["detail"]} for r in rows])
+        df = drop_empty(pd.DataFrame([{"Об'єкт": r["name"], "IMEI": r["imei"], "Статус": LABELS[r["status"]],
+                            "Деталі": r["detail"]} for r in rows]))
         b = st.columns(4)
         if b[0].button("Зупинити", disabled=not job.running, width="stretch", key="c_stop"):
             job.stop()
@@ -1021,8 +1028,17 @@ def dispatch_progress(job: DispatchJob) -> None:
         rows.sort(key=lambda r: (r["order"] is None, r["order"] or 0, r["name"].lower()))
         def answer_text(r):
             return r["answer"] or r["detail"] or (
-                ("Вийшов на зв'язок після відправки — відповіді ще немає" if DispatchJob.woke(r)
-                 else "Після відправки на зв'язок не виходив") if r["status"] == SENT else "")
+                ("Виходив на зв'язок, відповіді ще немає" if DispatchJob.woke(r)
+                 else "Не виходив на зв'язок") if r["status"] == SENT else "")
+
+        def status_cell(r):
+            """Статус + час: «Відповів · 17:24:14», «Чекаємо · з 17:24:12»."""
+            label = LABELS[r["status"]]
+            if r["answered_at"]:
+                return f"{label} · {fmt_time(r['answered_at'])}"
+            if r["sent_at"] and r["status"] in (SENT, NO_ANSWER):
+                return f"{label} · з {fmt_time(r['sent_at'])}"
+            return label
 
         df_csv = pd.DataFrame([{
             "№": str(r["order"] or ""), "Об'єкт": r["name"], "IMEI": r["imei"],
@@ -1034,12 +1050,9 @@ def dispatch_progress(job: DispatchJob) -> None:
         df = pd.DataFrame([{
             "№": str(r["order"] or ""), "Об'єкт": r["name"],
             "Останнє повідомлення": seen_cell(r["activity"], r["last_message"]),
-            "Надіслано → відповів": fmt_time(r["sent_at"]) + (f" → {fmt_time(r['answered_at'])}"
-                                                               if r["answered_at"] else ""),
-            "Статус": LABELS[r["status"]], "Відповідь трекера / деталі": answer_text(r), "IMEI": r["imei"],
+            "Статус": status_cell(r), "Відповідь трекера / деталі": answer_text(r), "IMEI": r["imei"],
         } for r in rows])
-        if len(df) and not df["IMEI"].astype(bool).any():
-            df = df.drop(columns=["IMEI"])  # API не віддає IMEI — не займаємо місце порожньою колонкою
+        df, df_csv = drop_empty(df), drop_empty(df_csv)
         b[2].download_button("Завантажити звіт CSV", csv_bytes(df_csv), width="stretch", disabled=job.running,
                              file_name=f"dispatch_{job.name}_{datetime.now(LOCAL_TZ):%Y%m%d_%H%M}.csv",
                              mime="text/csv", key="d_csv")

@@ -430,7 +430,7 @@ class DispatchJob(BaseJob):
 
     def __init__(self, client: M2MClient, group: dict, name: str, text: str,
                  targets: list[tuple[Device, int]], skipped: list[tuple[Device, str]], cfg: LoadCfg,
-                 wait_minutes: float = 15, poll_every: float = 15, online_min: float = 10,
+                 wait_minutes: float = 15, poll_every: float = 15, online_min: float = 5,
                  activity_every: float = 60):
         """targets надсилаються в переданому порядку (для пріоритету — відсортуйте by_priority).
         activity_every — як часто під час очікування перечитувати «останнє повідомлення» об'єктів, с."""

@@ -213,6 +213,11 @@ def demo() -> FakeM2M:
 
 
 if __name__ == "__main__":
-    srv, url = demo().serve(8765)
+    import os
+    api = demo()
+    if os.environ.get("FAKE_NO_IMEI"):  # як у реального клієнта: API не віддає IMEI
+        for d in api.devices.values():
+            d["uniqueId"] = ""
+    srv, url = api.serve(8765)
     print(f"Фейковий API: {url}  (пароль demo123)")
     threading.Event().wait()
