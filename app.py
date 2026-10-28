@@ -42,7 +42,8 @@ st.markdown(
 S = st.session_state
 for k, v in {"client": None, "groups": [], "devices": {}, "scans": {}, "create_job": None, "create_stage": "form",
              "dispatch_job": None, "dispatch_stage": "form", "prev_dispatch": {}, "runs": {}, "last_name": "",
-             "d_wait": 15, "d_online": 10, "d_priority": True}.items():
+             "d_wait": 15, "d_online": 10, "d_priority": True,
+             "d_skip_acc": True}.items():
     S.setdefault(k, v)
 # Streamlit забуває значення полів, які в цьому проході не намальовані (напр., форма під час прогресу).
 # Перезапис зберігає їх між екранами.
@@ -116,6 +117,13 @@ def ago(dt: datetime | None) -> str:
     if sec < 86400:
         return f"{int(sec // 3600)} год тому"
     return f"{int(sec // 86400)} дн тому"
+
+
+def last_seen(dt: datetime | None) -> str:
+    """«28.10 14:52 · 7 хв тому»."""
+    if not dt:
+        return "—"
+    return f"{dt.astimezone(LOCAL_TZ).strftime('%d.%m %H:%M')} · {ago(dt)}"
 
 
 def mmss(sec: float | None) -> str:
@@ -365,7 +373,7 @@ def create_tab() -> None:
                     state = f"Вже є · ID {same[0].id}" + ("" if same[0].text == text else " · інший текст")
                 else:
                     state = "Немає — створимо" if name else "—"
-                rows.append({"Об'єкт": d.name, "IMEI": d.imei, "Останнє повідомлення": ago(d.last_message),
+                rows.append({"Об'єкт": d.name, "IMEI": d.imei, "Останнє повідомлення": last_seen(d.last_message),
                              f"Право «{PERM_CREATE}»": {True: "Є", False: "Немає"}.get(d.can_create, "—"),
                              f"Команда «{name}»" if name else "Команда": state})
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", height=360)
@@ -453,9 +461,23 @@ def create_progress(job: CreateJob) -> None:
 
 
 # ---------------------------------------------------------------- вкладка 2: відправка
+def accepted_map(name: str, text: str) -> dict[int, str]:
+    """id об'єкта → коли він прийняв цю команду (у будь-якій групі, за будь-який запуск)."""
+    folder = command_dir(name, text)
+    out: dict[int, str] = {}
+    gh_docs, _ = load_docs(get_store())
+    for docs in (gh_docs, local_docs()):
+        for g in (docs.get(folder) or {}).get("groups", {}).values():
+            for did, d in g["devices"].items():
+                if d.get("accepted"):
+                    out[int(did)] = fmt_local(d.get("answered_at")) or out.get(int(did), "")
+    return out
+
+
 def build_targets(devices: list[Device], scan: ScanJob, name: str, text: str, mode: str, online_min: int,
-                  prev: DispatchJob | None):
+                  prev: DispatchJob | None, accepted: dict[int, str] | None = None):
     targets, skipped = [], []
+    accepted = accepted or {}
     limit = now_utc() - timedelta(minutes=online_min)
     retry_ids = set(prev.not_answered()) if prev else set()
     for d in devices:
@@ -468,6 +490,8 @@ def build_targets(devices: list[Device], scan: ScanJob, name: str, text: str, mo
             skipped.append((d, f"Інший текст команди «{name}»" if same else f"Немає команди «{name}»"))
         elif d.can_execute is False:
             skipped.append((d, f"Немає права «{PERM_EXECUTE}»"))
+        elif d.id in accepted:
+            skipped.append((d, f"Вже прийняв команду ({accepted[d.id]})" if accepted[d.id] else "Вже прийняв команду"))
         elif mode == "online" and (d.last_message is None or d.last_message < limit):
             skipped.append((d, f"Офлайн: останнє повідомлення {ago(d.last_message)}"))
         elif mode == "retry" and d.id not in retry_ids:
@@ -501,7 +525,8 @@ def dispatch_tab() -> None:
         return
     name_counts = dict(names)
     default = S.get("last_name") or S.get("c_name", "").strip()
-    idx = next((i for i, (n, _) in enumerate(names) if n == default), 0)
+    idx = next((i for i, (n, _) in enumerate(names) if n == default),
+               next((i for i, (n, _) in enumerate(names) if n == DEFAULT_NAME), 0))
     # ключ залежить від щойно створеної команди: після створення вона вибирається автоматично
     name = st.selectbox("Команда", [n for n, _ in names], index=idx, key=f"d_cmd_{gid}_{default}_{len(names)}",
                         format_func=lambda n: f"{n} — є на {fmt_n(name_counts[n])} з {n_obj(len(devices))}")
@@ -543,12 +568,20 @@ def dispatch_tab() -> None:
                  "retry": "Тим, хто не відповів минулого разу"}
         mode = st.radio("Кому надсилати", [m for m in modes if m != "retry" or prev], key="d_mode",
                         format_func=modes.get)
+        skip_acc = st.toggle("Не надсилати тим, хто вже прийняв команду", key="d_skip_acc",
+                             help="Звірка зі статистикою (вкладка «3»): об'єкти, від яких уже є «Результат команди», "
+                                  "пропускаються — зручно для повторної відправки через годину чи завтра")
     with c2:
         wait = st.number_input("Чекати відповідь, хв", min_value=1, max_value=180, key="d_wait")
         st.caption("Після цього об'єкти без відповіді отримають статус «Без відповіді». Пізню відповідь можна "
                    "дочитати кнопкою «Перевірити відповіді ще раз».")
 
-    targets, skipped = build_targets(devices, scan, name, text, mode, online_min, prev)
+    accepted = accepted_map(name, text) if skip_acc else {}
+    targets, skipped = build_targets(devices, scan, name, text, mode, online_min, prev, accepted)
+    if skip_acc:
+        in_group = sum(1 for d in devices if d.id in accepted)
+        st.caption(f"Звірка: у цій групі вже прийняли команду {n_obj(in_group)} — їм не надсилаємо."
+                   if in_group else "Звірка: у цій групі ще ніхто не прийняв цю команду.")
     if priority:
         targets = by_priority(targets)
     stale = sum(1 for d, _ in targets if activity(d.last_message, online_min) == STALE)
@@ -557,7 +590,7 @@ def dispatch_tab() -> None:
                    "відповідять. Потім їм можна надіслати ще раз окремим запуском.")
     reasons: dict[str, int] = {}
     for _, r in skipped:
-        key = r.split(":")[0] if r.startswith(("Офлайн", "Не вдалося")) else r
+        key = r.split(":")[0] if r.startswith(("Офлайн", "Не вдалося")) else r.split(" (")[0]
         reasons[key] = reasons.get(key, 0) + 1
     b1, b2 = st.columns([2, 3], vertical_alignment="center")
     if b1.button(f"Надіслати на {n_obj(len(targets))}", type="primary", width="stretch",
@@ -865,7 +898,7 @@ def dispatch_progress(job: DispatchJob) -> None:
         rows.sort(key=lambda r: (r["order"] is None, r["order"] or 0, r["name"].lower()))
         df = pd.DataFrame([{
             "№": str(r["order"] or ""), "Об'єкт": r["name"], "Активність": act_label(r["activity"]),
-            "Останнє повідомлення": ago(r["last_message"]), "Надіслано": fmt_time(r["sent_at"]),
+            "Останнє повідомлення": last_seen(r["last_message"]), "Надіслано": fmt_time(r["sent_at"]),
             "Статус": LABELS[r["status"]], "Відповідь трекера / деталі": r["answer"] or r["detail"] or (
                 ("Вийшов на зв'язок після відправки — відповіді ще немає" if DispatchJob.woke(r)
                  else "Після відправки на зв'язок не виходив") if r["status"] == SENT else ""),
