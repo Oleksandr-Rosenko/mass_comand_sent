@@ -522,7 +522,8 @@ class DispatchJob(BaseJob):
             return 0
         with self._poll_lock:
             try:
-                items = self.client.new_results(self.last_id)
+                # за часом (createdAt), а не за id: номери записів в історії можуть іти не по порядку
+                items = self.client.results_since(self.started_wall - self.CLOCK_SLACK)
                 self.poll_error = ""
             except ApiError as e:
                 self.poll_error = f"Не вдалося прочитати відповіді: {e}"
@@ -530,7 +531,6 @@ class DispatchJob(BaseJob):
             self.last_poll = time.time()
             got = 0
             for it in items:
-                self.last_id = max(self.last_id, int(it["id"]))
                 did = result_device_id(it)
                 with self._lock:
                     r = self.rows.get(did) if did is not None else None

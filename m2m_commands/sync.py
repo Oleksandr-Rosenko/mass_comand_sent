@@ -17,18 +17,25 @@ import sys
 from .client import M2MClient
 from .errors import ApiError
 from .github_store import GitHubError, GitHubStore
-from .stats import apply_history, history_since
+from .stats import apply_history, history_diagnostics, history_since
 
 
-def sync_docs(client: M2MClient, store: GitHubStore, docs: dict[str, dict]) -> tuple[int, str]:
-    """Дозараховує відповіді з історії в кожну команду (папку) статистики. Повертає (змін, помилка)."""
+def sync_docs(client: M2MClient, store: GitHubStore, docs: dict[str, dict], info: dict | None = None
+              ) -> tuple[int, str]:
+    """Дозараховує відповіді з історії в кожну команду (папку) статистики. Повертає (змін, помилка).
+    info (якщо передано) заповнюється діагностикою: з якого часу читали, скільки прочитано і чому не зараховано."""
+    info = info if info is not None else {}
     since_all = [x for d in docs.values() if (x := history_since(d))]
+    info["since"] = min(since_all) if since_all else None
     if not since_all:
+        info["note"] = "Немає об'єктів, яким надсилали команду і які ще не прийняли — звіряти нічого"
         return 0, ""
     try:
         items = client.results_since(min(since_all))
     except ApiError as e:
-        return 0, f"Не вдалося прочитати історію сповіщень: {e}"
+        info["error"] = f"Не вдалося прочитати історію сповіщень: {e}"
+        return 0, info["error"]
+    info.update(history_diagnostics(list(docs.values()), items))
     total, err = 0, ""
     for folder, doc in docs.items():
         if apply_history(copy.deepcopy(doc), items) == 0:
@@ -44,6 +51,7 @@ def sync_docs(client: M2MClient, store: GitHubStore, docs: dict[str, dict]) -> t
             total += res.get("n", 0)
         except GitHubError as e:
             err = str(e)
+    info["applied"], info["error"] = total, err
     return total, err
 
 

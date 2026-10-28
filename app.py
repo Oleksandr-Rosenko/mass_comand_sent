@@ -761,8 +761,10 @@ def persist(job: DispatchJob, store: GitHubStore | None) -> None:
 
 def sync_history(store: GitHubStore, docs: dict[str, dict]) -> tuple[int, str]:
     """Дозараховує в статистику відповіді з історії сповіщень (по всіх командах). Повертає (змін, помилка)."""
-    n, err = sync_docs(S.client, store, docs)
+    info: dict = {}
+    n, err = sync_docs(S.client, store, docs, info)
     S.last_sync = time.time()
+    S.sync_info = {**info, "at": time.time()}
     if n:
         S.gh_docs = None
     return n, err
@@ -875,6 +877,33 @@ def tagged(name: str) -> bool:
     return any(t.upper() in up for t in STATS_TAGS)
 
 
+def sync_diagnostics() -> None:
+    """Блок «Діагностика звірки»: що прочитано з історії і чому відповіді зараховано чи ні."""
+    info = S.get("sync_info")
+    if not info:
+        return
+    when = datetime.fromtimestamp(info["at"]).astimezone(LOCAL_TZ).strftime("%H:%M:%S")
+    if info.get("error"):
+        st.warning(f"Звірка з історією о {when} не вдалася: {info['error']}")
+    with st.expander(f"Діагностика звірки з історією · о {when} · прочитано {fmt_n(info.get('read', 0))}, "
+                     f"зараховано {fmt_n(info.get('applied', 0))}"):
+        if info.get("note"):
+            st.caption(info["note"])
+        if info.get("since"):
+            st.caption(f"Читали «Результати команди» з {fmt_time(info['since'], True)} (перша відправка мінус 2 хв).")
+        rows = [("Прочитано записів з історії", info.get("read", 0)),
+                ("Підходять для зарахування (після відправки, ще не прийняв)", info.get("match", 0)),
+                ("Об'єкт уже «Прийняв»", info.get("already", 0)),
+                ("Цьому об'єкту команду не надсилали (за статистикою)", info.get("not_sent", 0)),
+                ("Відповідь раніше за відправку", info.get("too_early", 0)),
+                ("Без deviceId", info.get("no_device", 0)),
+                ("Не вдалося розібрати дату (createdAt)", info.get("no_date", 0))]
+        st.dataframe(pd.DataFrame(rows, columns=["Що", "Скільки"]), hide_index=True, width="stretch")
+        if info.get("sample"):
+            st.caption("Приклад сирих записів з історії (перші 5):")
+            st.dataframe(pd.DataFrame(info["sample"]), hide_index=True, width="stretch")
+
+
 def stats_tab() -> None:
     store = get_store()
     auto_sync()
@@ -911,6 +940,7 @@ def stats_tab() -> None:
         docs = {command_dir(DEFAULT_NAME, DEFAULT_TEXT): {"command": {"name": DEFAULT_NAME, "text": DEFAULT_TEXT},
                                                           "groups": {}}}
 
+    sync_diagnostics()
     keys = list(docs)
     labels = {k: f"{docs[k]['command']['name']} — {docs[k]['command']['text']}" for k in keys}
     want = command_dir(S.get("last_name") or S.get("c_name", ""), S.get("c_text", ""))

@@ -136,6 +136,41 @@ def apply_history(doc: dict, items: list[dict], slack: timedelta = timedelta(min
     return changed
 
 
+def history_diagnostics(docs: list[dict], items: list[dict], slack: timedelta = timedelta(minutes=2)) -> dict:
+    """Чому відповіді з історії зараховані чи ні — для блоку «Діагностика звірки»."""
+    sent: dict[int, datetime | None] = {}
+    accepted: set[int] = set()
+    for doc in docs:
+        for g in doc.get("groups", {}).values():
+            for did, rec in g["devices"].items():
+                if rec["accepted"]:
+                    accepted.add(int(did))
+                elif rec.get("sent_runs"):
+                    st = first_send(g, rec)
+                    prev = sent.get(int(did))
+                    sent[int(did)] = st if prev is None or (st and st < prev) else prev
+    out = {"read": len(items), "no_device": 0, "no_date": 0, "not_sent": 0, "already": 0, "too_early": 0,
+           "match": 0, "sample": []}
+    for it in items:
+        did, dt = result_device_id(it), parse_dt(it.get("createdAt"))
+        if len(out["sample"]) < 5:
+            out["sample"].append({"id": it.get("id"), "deviceId": it.get("deviceId"), "deviceName": it.get("deviceName"),
+                                  "createdAt": it.get("createdAt"), "message": clean_message(it.get("message"))[:60]})
+        if did is None:
+            out["no_device"] += 1
+        elif dt is None:
+            out["no_date"] += 1
+        elif did in accepted:
+            out["already"] += 1
+        elif did not in sent:
+            out["not_sent"] += 1
+        elif sent[did] is not None and dt < sent[did] - slack:
+            out["too_early"] += 1
+        else:
+            out["match"] += 1
+    return out
+
+
 # ---------------------------------------------------------------- зведення
 def group_summary(g: dict) -> dict:
     accepted = sum(1 for d in g["devices"].values() if d["accepted"])
