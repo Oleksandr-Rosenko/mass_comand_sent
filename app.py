@@ -66,6 +66,13 @@ def secret(key: str, default: str = "") -> str:
         return default
 
 
+# Команда за замовчуванням — підставляється у форму створення; змінюється в Secrets без правок коду.
+DEFAULT_NAME = secret("DEFAULT_COMMAND_NAME", "NTP")
+DEFAULT_TEXT = secret("DEFAULT_COMMAND_TEXT", "runcmd:@com_tsync_disallow:1")
+S.setdefault("c_name", DEFAULT_NAME)
+S.setdefault("c_text", DEFAULT_TEXT)
+
+
 def fmt_n(n) -> str:
     return f"{int(n):,}".replace(",", " ")
 
