@@ -47,7 +47,25 @@ for k, v in {"client": None, "groups": [], "devices": {}, "scans": {}, "create_j
     S.setdefault(k, v)
 # Streamlit забуває значення полів, які в цьому проході не намальовані (напр., форма під час прогресу).
 # Перезапис зберігає їх між екранами.
-for k in ("g_create", "c_name", "c_text", "g_dispatch", "d_wait", "d_online", "d_mode", "d_priority"):
+TABS = ["1 · Створення команди", "2 · Відправка і результати", "3 · Статистика"]
+
+# Перехід між вкладками кнопкою: запам'ятовуємо, куди йти, і застосовуємо на початку наступного проходу,
+# поки віджети ще не створені (інакше Streamlit не дозволить змінити їхні значення).
+_nav = S.pop("nav_pending", None)
+if _nav:
+    S["nav"] = _nav["tab"]
+    if _nav.get("gid") is not None:
+        S["g_dispatch"] = _nav["gid"]
+        S["auto_scan"] = _nav["gid"]  # на кроці 2 одразу прочитати команди групи, без зайвого кліку
+    if _nav.get("name"):
+        S["last_name"] = _nav["name"]
+    if _nav.get("text") is not None:
+        S["go_text"] = _nav["text"]
+    job_ = S.get("dispatch_job")
+    if _nav["tab"] == TABS[1] and not (job_ is not None and job_.running):
+        S["dispatch_stage"] = "form"
+
+for k in ("g_create", "c_name", "c_text", "g_dispatch", "d_wait", "d_online", "d_mode", "d_priority", "d_skip_acc"):
     if k in S:
         S[k] = S[k]
 
@@ -142,6 +160,12 @@ def host_label(url: str) -> str:
 BATCH_SIZE, WORKERS, PAUSE_S, RETRIES = 50, 4, 2.0, 2
 POLL_EVERY_S = 15        # як часто читати нові «Результати команд»
 ACTIVITY_EVERY_S = 60    # як часто під час очікування оновлювати «останнє повідомлення» (1 запит на групу)
+
+
+def go_to(tab: int, gid: int | None = None, name: str | None = None, text: str | None = None) -> None:
+    """Перейти на вкладку (0, 1, 2) з уже вибраними групою й командою."""
+    S.nav_pending = {"tab": TABS[tab], "gid": gid, "name": name, "text": text}
+    st.rerun()
 
 
 def load_cfg() -> LoadCfg:
@@ -395,6 +419,12 @@ def create_tab() -> None:
         b2.caption(" і ".join(skip_parts) + " будуть пропущені")
     elif not name or not text.strip():
         b2.caption("Заповніть ім'я і текст команди")
+    ready_same = [d for d in have if any(c.text == text for c in find_by_name(scan.commands.get(d.id, []), name))] \
+        if scan and name else []
+    if ready_same:
+        if st.button(f"Команда «{name}» вже є на {n_obj(len(ready_same), OBJ_LOC)} — перейти до відправки →",
+                     key="c_go_dispatch_ready", disabled=any_running()):
+            go_to(1, gid, name, text)
 
 
 def create_progress(job: CreateJob) -> None:
@@ -422,12 +452,14 @@ def create_progress(job: CreateJob) -> None:
                 st.warning(f"Готово з помилками: створено {fmt_n(c.get(CREATED, 0))}, помилок {fmt_n(c[ERROR])}. "
                            "Натисніть «Повторити помилки» або подивіться деталі в таблиці.")
             else:
-                st.success(f"Готово: створено {fmt_n(c.get(CREATED, 0))}, пропущено {fmt_n(c.get(SKIPPED, 0))}. "
-                           "Можна переходити до вкладки «2 · Відправка і результати».")
+                st.success(f"Готово: створено {fmt_n(c.get(CREATED, 0))}, пропущено {fmt_n(c.get(SKIPPED, 0))}.")
         elif job.status == "stopped":
             st.warning(f"Зупинено. Не оброблено {n_obj(c.get(QUEUED, 0))} — їх можна дообробити кнопкою «Повторити».")
         elif job.status == "error":
             st.error(job.message)
+        if not job.running and job.status in ("done", "stopped") and c.get(CREATED, 0) + c.get(SKIPPED, 0):
+            if st.button("Перейти до відправки →", type="primary", key="c_go_dispatch"):
+                go_to(1, job.group["id"], job.name, job.text)
 
         rows = job.snapshot()
         df = pd.DataFrame([{"Об'єкт": r["name"], "IMEI": r["imei"], "Статус": LABELS[r["status"]],
@@ -515,6 +547,8 @@ def dispatch_tab() -> None:
     devices = get_devices(gid)
     if devices is None:
         return
+    if S.pop("auto_scan", None) == gid and S.scans.get(gid) is None and devices:
+        start_scan(gid)
     scan = scan_block(gid, devices, "d", "Щоб вибрати команду, прочитаю команди кожного об'єкта групи "
                                          "(пачками, щоб не навантажувати сервер).")
     if scan is None:
@@ -537,7 +571,9 @@ def dispatch_tab() -> None:
         st.code(text or "(порожній)", language=None)
     else:
         vc = dict(variants)
-        text = st.selectbox("Текст команди (на об'єктах він різний)", [t for t, _ in variants], key=f"d_txt_{gid}_{name}",
+        tidx = next((i for i, (t, _) in enumerate(variants) if t == S.get("go_text")), 0)
+        text = st.selectbox("Текст команди (на об'єктах він різний)", [t for t, _ in variants], index=tidx,
+                            key=f"d_txt_{gid}_{name}_{S.get('go_text', '')}",
                             format_func=lambda t: f"{t or '(порожній)'} — {n_obj(vc[t], OBJ_LOC)}")
         others = sum(c for t, c in variants if t != text)
         st.warning(f"На {n_obj(others, OBJ_LOC)} команда «{name}» має інший текст — їх не надсилаємо.")
@@ -673,7 +709,10 @@ def save_status(job: DispatchJob) -> None:
     state, msg, at = job.save_state
     when = datetime.fromtimestamp(at).astimezone(LOCAL_TZ).strftime("%H:%M:%S") if at else ""
     if state == "ok":
-        st.caption(f"{msg} о {when} — дивіться вкладку «3 · Статистика».")
+        c1, c2 = st.columns([3, 1], vertical_alignment="center")
+        c1.caption(f"{msg} о {when}.")
+        if c2.button("До статистики →", key="d_go_stats", width="stretch"):
+            go_to(2)
     elif state == "error":
         c1, c2 = st.columns([3, 1], vertical_alignment="center")
         c1.warning(f"Статистику не збережено: {msg}")
@@ -682,6 +721,8 @@ def save_status(job: DispatchJob) -> None:
             st.rerun()
     elif state in ("saving", "pending", "local"):
         st.caption(msg)
+        if state == "local" and st.button("До статистики →", key="d_go_stats_local"):
+            go_to(2)
 
 
 def local_docs() -> dict[str, dict]:
@@ -938,7 +979,7 @@ if S.client is None or not S.client.token:
 else:
     sidebar()
     st.title("Масові команди")
-    t1, t2, t3 = st.tabs(["1 · Створення команди", "2 · Відправка і результати", "3 · Статистика"])
+    t1, t2, t3 = st.tabs(TABS, key="nav", on_change="rerun")
     with t1:
         create_tab()
     with t2:
