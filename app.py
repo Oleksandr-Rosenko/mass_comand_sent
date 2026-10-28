@@ -374,7 +374,7 @@ def sidebar() -> None:
             st.rerun()
         if st.button("Оновити список груп", disabled=busy, width="stretch"):
             try:
-                S.groups, S.devices, S.scans = client.groups(), {}, {}
+                S.groups, S.devices, S.scans, S.owner_groups = client.groups(), {}, {}, None
             except ApiError as e:
                 st.error(str(e))
 
@@ -782,6 +782,34 @@ def load_docs(store: GitHubStore | None) -> tuple[dict[str, dict], str]:
     return S.gh_docs, "github"
 
 
+STATS_OWNER = secret("STATS_OWNER_EMAIL", "alona.suprun@kyivstar.net").strip()
+STATS_TAGS = [t.strip() for t in secret("STATS_PRIORITY_TAGS", "_OVA,_KS").split(",") if t.strip()]
+
+
+def owner_group_ids() -> set[int] | None:
+    """Групи, створені STATS_OWNER (кеш на сесію). None — фільтр не застосовано (немає email або помилка)."""
+    if not STATS_OWNER:
+        return None
+    if S.get("owner_groups") is None:
+        try:
+            with st.spinner(f"Шукаю групи користувача {STATS_OWNER}…"):
+                uid = S.client.find_user_id(STATS_OWNER)
+                groups = S.client.groups_with_creator()
+            own = STATS_OWNER.lower()
+            S.owner_groups = {int(g["id"]) for g in groups if g.get("id") is not None and (
+                (uid is not None and g.get("creatorId") == uid) or str(g.get("creatorName") or "").lower() == own)}
+            S.owner_error = "" if uid is not None or S.owner_groups else f"Користувача {STATS_OWNER} не знайдено"
+        except ApiError as e:
+            S.owner_groups, S.owner_error = None, f"Не вдалося отримати групи {STATS_OWNER}: {e}"
+            return None
+    return S.owner_groups
+
+
+def tagged(name: str) -> bool:
+    up = name.upper()
+    return any(t.upper() in up for t in STATS_TAGS)
+
+
 def stats_tab() -> None:
     store = get_store()
     docs, source = load_docs(store)
@@ -800,8 +828,9 @@ def stats_tab() -> None:
         S.gh_docs = None
         st.rerun()
     if not docs:
-        st.info("Ще немає жодного запуску. Статистика з'явиться після першої відправки на вкладці «2».")
-        return
+        st.info("Ще немає жодного запуску — нижче список груп, статистика з'явиться після першої відправки.")
+        docs = {command_dir(DEFAULT_NAME, DEFAULT_TEXT): {"command": {"name": DEFAULT_NAME, "text": DEFAULT_TEXT},
+                                                          "groups": {}}}
 
     keys = list(docs)
     labels = {k: f"{docs[k]['command']['name']} — {docs[k]['command']['text']}" for k in keys}
@@ -815,11 +844,26 @@ def stats_tab() -> None:
                     f"`{docs[folder]['command']['text']}`")
     doc = docs[folder]
     name = doc["command"]["name"]
-    checked = sorted(doc["groups"].items(), key=lambda kv: kv[1].get("last_run_at") or "", reverse=True)
+    own = owner_group_ids()
+    if own is None:
+        if S.get("owner_error"):
+            st.warning(f"{S.owner_error}. Показую всі групи.")
+    else:
+        if S.get("owner_error"):
+            st.warning(S.owner_error)
+        st.caption(f"Групи користувача **{STATS_OWNER}** ({fmt_n(len(own))}): спершу перевірені, потім з "
+                   f"{' / '.join(STATS_TAGS)} у назві, потім решта.")
+
+    def mine(gid) -> bool:
+        return own is None or int(gid) in own
+
+    checked = sorted(((gid, g) for gid, g in doc["groups"].items() if mine(gid)),
+                     key=lambda kv: kv[1].get("last_run_at") or "", reverse=True)
     sums = {gid: group_summary(g) for gid, g in checked}
     total_obj = sum(x["objects"] for x in sums.values())
     total_acc = sum(x["accepted"] for x in sums.values())
-    unchecked = [g for g in S.groups if str(g["id"]) not in doc["groups"]]
+    unchecked = sorted((g for g in S.groups if str(g["id"]) not in doc["groups"] and mine(g["id"])),
+                       key=lambda g: (not tagged(g["name"]), g["name"].lower()))
     m = st.columns(3)
     m[0].metric("Груп перевірено", f"{fmt_n(len(checked))} з {fmt_n(len(checked) + len(unchecked))}", border=True)
     m[1].metric("Об'єктів у перевірених групах", fmt_n(total_obj), border=True)
@@ -849,7 +893,8 @@ def stats_tab() -> None:
     for g in unchecked:
         with st.expander(f"**{g['name']}** · {n_obj(len(g['deviceIds']))} · :gray[не перевірялась]"):
             st.caption(f"Команду «{name}» на цій групі ще не запускали.")
-    st.download_button("Завантажити всю статистику (CSV)", csv_bytes(pd.DataFrame(objects_table(doc))),
+    full = {**doc, "groups": {gid: g for gid, g in doc["groups"].items() if mine(gid)}}
+    st.download_button("Завантажити всю статистику (CSV)", csv_bytes(pd.DataFrame(objects_table(full))),
                        key="st_csv_all", file_name=f"{name}_усі_групи_{datetime.now(LOCAL_TZ):%Y%m%d}.csv",
                        mime="text/csv")
 

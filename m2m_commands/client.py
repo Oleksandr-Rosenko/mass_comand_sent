@@ -40,6 +40,7 @@ class M2MClient:
         self.token: str | None = None
         self.refresh_token: str | None = None
         self.email: str | None = None
+        self.user_id: int | None = None
         self._password: str | None = None  # лише в пам'яті сесії — для повторного входу, ніде не зберігається
         self._lock = threading.Lock()
         self._local = threading.local()
@@ -73,6 +74,7 @@ class M2MClient:
         self.token = d.get("token") or d.get("accessToken")
         self.refresh_token = d.get("refreshToken")
         self.email, self._password = email, password
+        self.user_id = (d.get("user") or {}).get("id")
         if not self.token:
             raise ApiError("Сервер не повернув токен")
 
@@ -165,6 +167,28 @@ class M2MClient:
             out.append({"id": g["id"], "name": g.get("name") or f"Група {g['id']}",
                         "deviceIds": list(g.get("deviceIds") or [])})
         return sorted(out, key=lambda g: g["name"].lower())
+
+    def find_user_id(self, email: str) -> int | None:
+        """id користувача за email: сам користувач або один з його дочірніх користувачів."""
+        email = email.strip().lower()
+        if self.email and self.email.lower() == email and self.user_id is not None:
+            return int(self.user_id)
+        for u in items_of(self.request("GET", "/api/users", params={"search": email})):
+            if str(u.get("email") or "").lower() == email and u.get("id") is not None:
+                return int(u["id"])
+        return None
+
+    def groups_with_creator(self, per_page: int = 200) -> list[dict]:
+        """Усі групи з полями creatorId / creatorName (посторінково)."""
+        out, page = [], 1
+        while True:
+            d = self.request("GET", "/api/device/groups", params={"page": page, "per_page": per_page})
+            items = items_of(d)
+            out += items
+            pages = int(d.get("pages") or 0) if isinstance(d, dict) else 0
+            if not items or (pages and page >= pages) or (not pages and len(items) < per_page):
+                return out
+            page += 1
 
     def group_devices(self, group_id: int) -> list[dict]:
         """Об'єкти групи з назвою, IMEI, часом останнього повідомлення й правами."""

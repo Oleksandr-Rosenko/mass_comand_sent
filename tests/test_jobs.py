@@ -292,3 +292,14 @@ def test_dispatch_503_is_not_resent():
 
 def test_clean_message():
     assert clean_message('Готово <a href="/x">тут</a>  ок') == "Готово тут ок"
+
+
+def test_owner_groups_by_creator():
+    api = FakeM2M(n_devices=3)
+    cl, srv = connect(api)
+    uid = cl.find_user_id("Alona.Suprun@kyivstar.net")
+    assert uid == 55
+    own = {g["id"] for g in cl.groups_with_creator(per_page=4) if g["creatorId"] == uid}  # 2 сторінки
+    assert own == {7, 9, 10, 11}
+    assert cl.find_user_id("nobody@x.ua") is None
+    srv.shutdown()

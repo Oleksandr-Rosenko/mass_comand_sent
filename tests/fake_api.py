@@ -31,6 +31,11 @@ class FakeM2M:
         self.commands = {i: [{"id": 1000 + i, "description": "01. GETVER", "type": "CUSTOM",
                               "attributes": {"data": "getver"}}] for i in self.devices}
         self.next_cmd = 100000
+        self.users = [{"id": 55, "email": "alona.suprun@kyivstar.net"}, {"id": 56, "email": "other@x.ua"}]
+        # групи: творець 55 — клієнт; 56 — чужа
+        self.groups_meta = [{"id": gid, "name": n, "creatorId": c, "creatorName": "", "deviceCount": 0} for gid, n, c in (
+            (7, "Генератори", 55), (8, "Тест", 56), (9, "Київ_OVA", 55), (10, "Львів_KS", 55), (11, "Аптеки", 55),
+            (12, "Чужа_OVA", 56))]
         for i in have_cmd:
             self._add(i, name, text)
         for i in other_text:
@@ -93,8 +98,16 @@ class FakeM2M:
             return 401, {"message": "Token expired"}
 
         if path == "/api/device/groups/lightweight/all":
-            return 200, [{"id": 7, "name": "Генератори", "deviceIds": list(self.devices)},
-                         {"id": 8, "name": "Тест", "deviceIds": [1, 2]}]
+            return 200, [{"id": g["id"], "name": g["name"], "deviceIds": list(self.devices) if g["id"] == 7 else [1, 2]}
+                         for g in self.groups_meta]
+        if path == "/api/device/groups":
+            per, page = int(query.get("per_page", ["10"])[0]), int(query.get("page", ["1"])[0])
+            items = self.groups_meta[(page - 1) * per: page * per]
+            return 200, {"pages": max(1, -(-len(self.groups_meta) // per)), "page": page, "total": len(self.groups_meta),
+                         "items": items}
+        if path == "/api/users":
+            q = query.get("search", [""])[0].lower()
+            return 200, [u for u in self.users if q in u["email"]]
         m = re.fullmatch(r"/api/group/(\d+)/devices", path)
         if m:
             ids = list(self.devices) if m.group(1) == "7" else [1, 2]
