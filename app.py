@@ -124,9 +124,15 @@ def host_label(url: str) -> str:
     return urlparse(url if "//" in url else f"//{url}").hostname or url
 
 
+# Навантаження — фіксоване, перевірене на групі з 534 об'єктів; підходить і для 100, і для 500+:
+# пачки по 50 об'єктів, у пачці до 4 запитів одночасно, 2 с паузи між пачками.
+BATCH_SIZE, WORKERS, PAUSE_S, RETRIES = 50, 4, 2.0, 2
+POLL_EVERY_S = 15        # як часто читати нові «Результати команд»
+ACTIVITY_EVERY_S = 60    # як часто під час очікування оновлювати «останнє повідомлення» (1 запит на групу)
+
+
 def load_cfg() -> LoadCfg:
-    return LoadCfg(batch_size=int(S.get("cfg_batch", 50)), pause=float(S.get("cfg_pause", 2.0)),
-                   workers=int(S.get("cfg_workers", 4)))
+    return LoadCfg(batch_size=BATCH_SIZE, pause=PAUSE_S, workers=WORKERS)
 
 
 def any_running() -> bool:
@@ -293,24 +299,10 @@ def sidebar() -> None:
             f"<div style='font-weight:600;word-break:break-all'>{html.escape(client.email or '')}</div></div>",
             unsafe_allow_html=True,
         )
-        st.markdown("**Навантаження**")
         busy = any_running()
-        st.number_input("Розмір пачки, об'єктів", 1, 500, 50, key="cfg_batch", disabled=busy)
-        st.number_input("Пауза між пачками, с", 0.0, 60.0, 2.0, step=0.5, key="cfg_pause", disabled=busy)
-        st.number_input("Паралельних запитів у пачці", 1, 10, 4, key="cfg_workers", disabled=busy)
-        st.number_input("Повторів при помилці 5xx", 0, 5, 2, key="cfg_retries", disabled=busy)
-        st.number_input("Опитувати відповіді кожні, с", 5, 120, 15, key="cfg_poll", disabled=busy)
-        st.number_input("Оновлювати «останнє повідомлення» кожні, хв", 0.5, 15.0, 1.0, step=0.5, key="cfg_act",
-                        disabled=busy, help="Під час очікування: один запит на всю групу, щоб бачити, чи виходять "
-                                            "на зв'язок ті, хто ще не відповів")
-        client.retries = int(S.get("cfg_retries", 2))
-        gid = S.get("g_create") or S.get("g_dispatch")
-        if busy:
-            st.caption("Налаштування заблоковані, поки йде запуск")
-        elif gid:
-            n = len(group_by_id(gid)["deviceIds"])
-            cfg = load_cfg()
-            st.caption(f"{n_obj(n)} → {cfg.batches(n)} {plural(cfg.batches(n), ('пачка', 'пачки', 'пачок'))}")
+        client.retries = RETRIES
+        st.caption(f"Запити йдуть пачками по {BATCH_SIZE} об'єктів, до {WORKERS} одночасно, з паузою "
+                   f"{PAUSE_S:g} с — щоб не навантажувати сервер.")
         if st.button("Вийти", disabled=busy, width="stretch"):
             for k in list(S.keys()):
                 del S[k]
@@ -495,7 +487,7 @@ def dispatch_tab() -> None:
     if devices is None:
         return
     scan = scan_block(gid, devices, "d", "Щоб вибрати команду, прочитаю команди кожного об'єкта групи "
-                                         "(пачками, як налаштовано ліворуч).")
+                                         "(пачками, щоб не навантажувати сервер).")
     if scan is None:
         return
     names = scan.names()
@@ -567,8 +559,8 @@ def dispatch_tab() -> None:
     if b1.button(f"Надіслати на {n_obj(len(targets))}", type="primary", width="stretch",
                  disabled=not targets or any_running()):
         job = DispatchJob(S.client, group_by_id(gid), name, text, targets, skipped, load_cfg(),
-                          wait_minutes=float(wait), poll_every=float(S.get("cfg_poll", 15)), online_min=online_min,
-                          activity_every=float(S.get("cfg_act", 1.0)) * 60)
+                          wait_minutes=float(wait), poll_every=POLL_EVERY_S, online_min=online_min,
+                          activity_every=ACTIVITY_EVERY_S)
         S.dispatch_job, S.dispatch_stage = job, "progress"
         register_run(job)
         job.start()
@@ -661,8 +653,8 @@ def resend(job: DispatchJob) -> None:
         dev = devices.get(did) or Device(id=did, name=r["name"], imei=r["imei"], last_message=r["last_message"])
         targets.append((dev, int(r["command_id"])))
     new = DispatchJob(S.client, job.group, job.name, job.text, by_priority(targets), [], load_cfg(),
-                      wait_minutes=job.wait_minutes, poll_every=float(S.get("cfg_poll", 15)),
-                      online_min=job.online_min, activity_every=float(S.get("cfg_act", 1.0)) * 60)
+                      wait_minutes=job.wait_minutes, poll_every=POLL_EVERY_S,
+                      online_min=job.online_min, activity_every=ACTIVITY_EVERY_S)
     S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
     S.dispatch_job = new
     register_run(new)
