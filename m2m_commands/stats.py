@@ -24,8 +24,8 @@ except Exception:  # noqa: BLE001 — старіша база часових з�
     TZ = ZoneInfo("Europe/Kiev")
 
 ACCEPTED = "Прийняв"
-NOT_ACCEPTED = {NO_ANSWER: "Без відповіді", ERROR: "Помилка відправки", NOT_SENT: "Не надіслано (зупинено)",
-                SENT: "Чекаємо відповідь"}
+NOT_ACCEPTED = {NO_ANSWER: "Надіслано, відповіді немає — повторити", ERROR: "Помилка відправки — повторити",
+                NOT_SENT: "Не надіслано (відправку зупинено) — повторити", SENT: "Чекаємо відповідь"}
 
 
 def command_dir(name: str, text: str) -> str:

@@ -31,7 +31,7 @@ st.set_page_config(page_title="Масові команди M2M", layout="wide")
 st.markdown(
     """
     <style>
-    .block-container {max-width: 1640px; padding-top: 2.6rem;}
+    .block-container {max-width: 1080px; padding-top: 2.6rem;}
     [data-testid="stMetricValue"] {font-size: 1.9rem;}
     section[data-testid="stSidebar"] {width: 240px !important; min-width: 240px !important;}
     [data-testid="stSidebar"] [data-testid="stNumberInput"] input {background: #FFFFFF;}
@@ -138,6 +138,18 @@ def ago(dt: datetime | None) -> str:
     return f"{int(sec // 86400)} дн тому"
 
 
+def seen_cell(k: str, dt: datetime | None) -> str:
+    """Активність + час в одній комірці: «● Онлайн · 3 хв тому», «● Сьогодні · 16:05», «● 5 дн тому · 23.10 14:20»."""
+    if dt is None:
+        return "● ніколи"
+    loc = dt.astimezone(LOCAL_TZ)
+    if k == ONLINE:
+        return f"● {ACTIVITY_LABELS[ONLINE]} · {ago(dt)}"
+    if k == TODAY:
+        return f"● {ACTIVITY_LABELS[TODAY]} · {loc:%H:%M}"
+    return f"● {days_ago(dt)} · {loc:%d.%m %H:%M}"
+
+
 def last_seen(dt: datetime | None) -> str:
     """«28.10 14:52 · 7 хв тому»."""
     if not dt:
@@ -194,8 +206,9 @@ def styled(df: pd.DataFrame, col: str = "Статус"):
         return f"color: {ACT_TEXT[k]}; font-weight: 600"
 
     sty = df.style.map(paint, subset=[col])
-    if "Активність" in df.columns:
-        sty = sty.map(paint_act, subset=["Активність"])
+    for c in ("Активність", "Останнє повідомлення"):
+        if c in df.columns:
+            sty = sty.map(paint_act, subset=[c])
     return sty
 
 
@@ -224,10 +237,8 @@ def activity_bar(counts: dict[str, int], online_min: int) -> None:
 
 # Ширина колонок у таблицях: вузькі службові колонки компактні, текст відповіді — широкий.
 COL_WIDTHS = {
-    "№": 40, "Прийняв": 75, "Активність": 105, "Надіслано": 80, "Отримано": 80, "Статус": 115,
-    "Об'єкт": 140, "IMEI": 140, "ID об'єкта": 85, "Останнє повідомлення": 160, "Коли відповів": 125,
-    "Останнє надсилання": 130, "Скільки разів надсилали": 90,
-    "Відповідь трекера / деталі": "medium", "Відповідь трекера": "medium", "Деталі": "medium",
+    "№": 40, "Прийняв": 70, "Статус": 110, "Об'єкт": 140, "IMEI": 135, "Останнє повідомлення": 175,
+    "Надіслано → відповів": 135, "Коли відповів": 105, "Надсилали": 80,
 }
 
 
@@ -822,7 +833,14 @@ def stats_tab() -> None:
         with st.expander(label):
             rows = device_rows(g)
             df = pd.DataFrame(rows)
-            st.dataframe(styled(df, "Прийняв"), hide_index=True, width="stretch", column_config=col_cfg(df),
+            view = pd.DataFrame([{
+                "Прийняв": r["Прийняв"], "Об'єкт": r["Об'єкт"],
+                "Відповідь / причина": r["Відповідь трекера"] if r["Прийняв"] == "Так"
+                else " · ".join(x for x in (r["Статус"], r["Деталі"]) if x),
+                "Коли відповів": r["Коли відповів"], "Надсилали": r["Скільки разів надсилали"],
+                "Останнє повідомлення": r["Останнє повідомлення"],
+            } for r in rows])
+            st.dataframe(styled(view, "Прийняв"), hide_index=True, width="stretch", column_config=col_cfg(view),
                          height=min(420, 40 + 35 * max(1, len(rows))))
             c1, c2 = st.columns([3, 1], vertical_alignment="center")
             c1.caption(f"Спершу ті, що прийняли, потім ті, що ні. Запусків на цій групі: {x['runs']}.")
@@ -956,17 +974,28 @@ def dispatch_progress(job: DispatchJob) -> None:
         rows = job.snapshot()
         # у порядку відправки (онлайн першими, якщо увімкнено пріоритет), пропущені — в кінці
         rows.sort(key=lambda r: (r["order"] is None, r["order"] or 0, r["name"].lower()))
-        df = pd.DataFrame([{
-            "№": str(r["order"] or ""), "Об'єкт": r["name"], "Активність": act_label(r["activity"], r["last_message"]),
-            "Останнє повідомлення": last_seen(r["last_message"]), "Надіслано": fmt_time(r["sent_at"]),
-            "Статус": LABELS[r["status"]], "Відповідь трекера / деталі": r["answer"] or r["detail"] or (
+        def answer_text(r):
+            return r["answer"] or r["detail"] or (
                 ("Вийшов на зв'язок після відправки — відповіді ще немає" if DispatchJob.woke(r)
-                 else "Після відправки на зв'язок не виходив") if r["status"] == SENT else ""),
-            "Отримано": fmt_time(r["answered_at"]), "IMEI": r["imei"],
+                 else "Після відправки на зв'язок не виходив") if r["status"] == SENT else "")
+
+        df_csv = pd.DataFrame([{
+            "№": str(r["order"] or ""), "Об'єкт": r["name"], "IMEI": r["imei"],
+            "Активність": act_label(r["activity"], r["last_message"]).lstrip("● "),
+            "Останнє повідомлення": fmt_time(r["last_message"], True), "Надіслано": fmt_time(r["sent_at"]),
+            "Статус": LABELS[r["status"]], "Відповідь трекера / деталі": answer_text(r),
+            "Отримано": fmt_time(r["answered_at"]),
+        } for r in rows])
+        df = pd.DataFrame([{
+            "№": str(r["order"] or ""), "Об'єкт": r["name"],
+            "Останнє повідомлення": seen_cell(r["activity"], r["last_message"]),
+            "Надіслано → відповів": fmt_time(r["sent_at"]) + (f" → {fmt_time(r['answered_at'])}"
+                                                               if r["answered_at"] else ""),
+            "Статус": LABELS[r["status"]], "Відповідь трекера / деталі": answer_text(r), "IMEI": r["imei"],
         } for r in rows])
         if len(df) and not df["IMEI"].astype(bool).any():
             df = df.drop(columns=["IMEI"])  # API не віддає IMEI — не займаємо місце порожньою колонкою
-        b[2].download_button("Завантажити звіт CSV", csv_bytes(df), width="stretch", disabled=job.running,
+        b[2].download_button("Завантажити звіт CSV", csv_bytes(df_csv), width="stretch", disabled=job.running,
                              file_name=f"dispatch_{job.name}_{datetime.now(LOCAL_TZ):%Y%m%d_%H%M}.csv",
                              mime="text/csv", key="d_csv")
         if b[3].button("← Нова відправка", disabled=job.running, width="stretch", key="d_back"):

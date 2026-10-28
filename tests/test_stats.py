@@ -42,7 +42,7 @@ def test_merge_accumulates_and_accepted_sticks():
     assert (s["objects"], s["accepted"], s["not_accepted"], s["runs"]) == (4, 2, 2, 2)
     assert g["devices"]["1"]["accepted"]  # у другому запуску не відповів, але раніше прийняв
     assert g["devices"]["2"]["accepted"] and g["devices"]["2"]["status"] == "Прийняв"
-    assert g["devices"]["3"]["status"] == "Помилка відправки"
+    assert g["devices"]["3"]["status"] == "Помилка відправки — повторити"
     assert g["devices"]["4"]["status"] == "Немає команди «NTP»"
     assert len(g["devices"]["1"]["sent_runs"]) == 2
 
