@@ -161,7 +161,9 @@ def describe_error(e: ApiError, perm: str) -> str:
     if e.status == 403:
         return f"403 — немає права «{perm}»"
     if e.status == 404:
-        return "404 — об'єкт або команду не знайдено"
+        raw = str(e)
+        server = raw.split("—", 1)[1].strip() if "—" in raw else ""
+        return "404 — об'єкт або команду не знайдено" + (f" (сервер: {server})" if server else "")
     return str(e)
 
 
