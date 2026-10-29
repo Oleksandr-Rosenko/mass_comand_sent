@@ -1059,7 +1059,7 @@ def stats_tab() -> None:
     index = device_index(doc)
     views = []
     for g in S.groups:
-        if not mine(g["id"]):
+        if not mine(g["id"]) or not g["deviceIds"]:  # порожні групи не показуємо — їх ніколи не перевірити
             continue
         summary, rows, untouched = group_view(index, [int(i) for i in g["deviceIds"]])
         views.append((g, summary, rows, untouched))
