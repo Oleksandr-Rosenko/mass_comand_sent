@@ -14,6 +14,7 @@ import streamlit as st
 
 from m2m_commands.client import NAME_MAX, TEXT_MAX, M2MClient
 from m2m_commands.errors import ApiError
+from m2m_commands import registry
 from m2m_commands.github_store import GitHubError, GitHubStore
 from m2m_commands.sync import sync_docs
 from m2m_commands.jobs import (
@@ -304,6 +305,24 @@ def start_scan(gid: int) -> None:
     job.start()
 
 
+def dup_warning(scan: ScanJob, devices: list[Device], name: str, key: str) -> None:
+    """Попередження, якщо на частині об'єктів кілька команд з цим ім'ям (напр., після двох паралельних створень)."""
+    if not name:
+        return
+    dups = scan.duplicates(name)
+    if not dups:
+        return
+    names = {d.id: d.name for d in devices}
+    st.warning(f"На {n_obj(len(dups), OBJ_LOC)} є по кілька команд «{name}» (дублі). На відправку це не впливає — "
+               "надсилається одна. Апка нічого не видаляє; за потреби приберіть зайві вручну на платформі.")
+    with st.expander(f"Об'єкти з дублями «{name}» — {fmt_n(len(dups))}"):
+        df = pd.DataFrame([{"Об'єкт": names.get(did, str(did)), "ID об'єкта": did,
+                            "ID команд «" + name + "»": ", ".join(map(str, ids))} for did, ids in dups.items()])
+        st.dataframe(df, hide_index=True, width="stretch")
+        st.download_button("CSV дублів", csv_bytes(df), key=f"dups_{key}", file_name=f"dups_{name}.csv",
+                           mime="text/csv")
+
+
 def scan_block(gid: int, devices: list[Device], prefix: str, intro: str) -> ScanJob | None:
     """Кнопка/прогрес перевірки команд групи. Повертає завершену перевірку або None."""
     scan: ScanJob | None = S.scans.get(gid)
@@ -399,11 +418,31 @@ def sidebar() -> None:
 
 
 # ---------------------------------------------------------------- вкладка 1: створення
+def running_elsewhere(kind: str) -> None:
+    """Показує запуски, що вже йдуть у фоні (з іншої вкладки чи до оновлення сторінки), і дає їх відкрити."""
+    mine = S.create_job if kind == "create" else S.dispatch_job
+    for j in registry.active(kind, S.client.base_url):
+        if j is mine:
+            continue
+        what = "створення" if kind == "create" else "відправка"
+        c1, c2 = st.columns([3, 1], vertical_alignment="center")
+        c1.warning(f"На групі «{j.group['name']}» вже йде {what} «{j.name}» "
+                   f"(запущено о {datetime.fromtimestamp(j.started_at).astimezone(LOCAL_TZ):%H:%M}). "
+                   "Другий запуск на цій групі не стартує, поки цей не завершиться.")
+        if c2.button("Показати його", key=f"attach_{kind}_{j.group['id']}", width="stretch"):
+            if kind == "create":
+                S.create_job, S.create_stage = j, "progress"
+            else:
+                S.dispatch_job, S.dispatch_stage = j, "progress"
+            st.rerun()
+
+
 def create_tab() -> None:
     job: CreateJob | None = S.create_job
     if job is not None and S.create_stage == "progress":
         create_progress(job)
         return
+    running_elsewhere("create")
 
     gid = group_select("g_create")
     c1, c2 = st.columns(2)
@@ -420,6 +459,8 @@ def create_tab() -> None:
 
     scan = scan_block(gid, devices, "c", "Перевірка прочитає команди кожного об'єкта й покаже, де команда з таким "
                                          "ім'ям уже є. Можна й одразу створювати — дублі все одно перевіряються.")
+    if scan and not scan.running:
+        dup_warning(scan, devices, name, "c")
     no_right = [d for d in devices if d.can_create is False]
     allowed = [d for d in devices if d.can_create is not False]
     have = [d for d in allowed if scan and name and find_by_name(scan.commands.get(d.id, []), name)]
@@ -455,6 +496,10 @@ def create_tab() -> None:
     b1, b2 = st.columns([2, 3], vertical_alignment="center")
     if b1.button(label, type="primary", disabled=not ready, width="stretch"):
         job = CreateJob(S.client, group_by_id(gid), devices, name, text, load_cfg(), scan=scan)
+        other = registry.claim("create", S.client.base_url, gid, job)
+        if other is not None:  # на цій групі вже йде створення (інша вкладка / подвійний клік) — показуємо його
+            S.create_job, S.create_stage = other, "progress"
+            st.rerun()
         S.create_job, S.create_stage, S.last_name = job, "progress", name
         job.start()
         st.rerun()
@@ -518,7 +563,8 @@ def create_progress(job: CreateJob) -> None:
         left = c.get(ERROR, 0) + c.get(QUEUED, 0)
         if b[1].button(f"Повторити помилки ({fmt_n(left)})", disabled=job.running or not left,
                        width="stretch", key="c_retry"):
-            job.retry_failed()
+            if registry.claim("create", S.client.base_url, job.group["id"], job) is None:
+                job.retry_failed()
             st.rerun()
         b[2].download_button("Завантажити звіт CSV", csv_bytes(df), width="stretch",
                              file_name=f"create_{job.name}_{datetime.now(LOCAL_TZ):%Y%m%d_%H%M}.csv",
@@ -588,6 +634,7 @@ def dispatch_tab() -> None:
     if job is not None and S.dispatch_stage == "progress":
         dispatch_progress(job)
         return
+    running_elsewhere("dispatch")
 
     if S.get("g_dispatch") is None and S.get("g_create") is not None:
         S.g_dispatch = S.g_create
@@ -614,6 +661,7 @@ def dispatch_tab() -> None:
     # ключ залежить від щойно створеної команди: після створення вона вибирається автоматично
     name = st.selectbox("Команда", [n for n, _ in names], index=idx, key=f"d_cmd_{gid}_{default}_{len(names)}",
                         format_func=lambda n: f"{n} — є на {fmt_n(name_counts[n])} з {n_obj(len(devices))}")
+    dup_warning(scan, devices, name, "d")
     variants = scan.variants(name)
     if len(variants) == 1:
         text = variants[0][0]
@@ -685,6 +733,10 @@ def dispatch_tab() -> None:
         job = DispatchJob(S.client, group_by_id(gid), name, text, targets, skipped, load_cfg(),
                           wait_minutes=float(wait), poll_every=POLL_EVERY_S, online_min=online_min,
                           activity_every=ACTIVITY_EVERY_S)
+        other = registry.claim("dispatch", S.client.base_url, gid, job)
+        if other is not None:  # на цій групі вже йде відправка — показуємо її, другу не запускаємо
+            S.dispatch_job, S.dispatch_stage = other, "progress"
+            st.rerun()
         S.dispatch_job, S.dispatch_stage = job, "progress"
         register_run(job)
         attach_persist(job)
@@ -1036,6 +1088,8 @@ def resend(job: DispatchJob) -> None:
                       online_min=job.online_min, activity_every=ACTIVITY_EVERY_S)
     S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
     S.dispatch_job = new
+    if registry.claim("dispatch", S.client.base_url, job.group["id"], new) is not None:
+        return
     register_run(new)
     attach_persist(new)
     new.start()

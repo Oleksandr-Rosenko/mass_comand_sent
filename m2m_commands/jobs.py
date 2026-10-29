@@ -315,6 +315,16 @@ class ScanJob(BaseJob):
                     cnt[n] = cnt.get(n, 0) + 1
         return sorted(cnt.items(), key=lambda x: (-x[1], x[0].lower()))
 
+    def duplicates(self, name: str) -> dict[int, list[int]]:
+        """Об'єкти, на яких кілька команд з цим ім'ям: {device_id: [command_id, ...]} (нічого не видаляє)."""
+        with self._lock:
+            out = {}
+            for did, cmds in self.commands.items():
+                ids = [c.id for c in find_by_name(cmds, name)]
+                if len(ids) > 1:
+                    out[did] = sorted(ids)
+            return out
+
     def variants(self, name: str) -> list[tuple[str, int]]:
         """Різні тексти команди з таким ім'ям: [(text, count)], найпоширеніші спершу."""
         cnt: dict[str, int] = {}

@@ -303,3 +303,31 @@ def test_owner_groups_by_creator():
     assert own == {7, 9, 10, 11}
     assert cl.find_user_id("nobody@x.ua") is None
     srv.shutdown()
+
+
+def test_registry_blocks_second_run_on_same_group():
+    from m2m_commands import registry
+    api = FakeM2M(n_devices=60)
+    cl, srv = connect(api)
+    devs = devices_of(cl)
+    cfg = LoadCfg(batch_size=10, pause=0.2, workers=2)
+    j1 = CreateJob(cl, {"id": 7, "name": "Г"}, devs, NAME, TEXT, cfg)
+    assert registry.claim("create", cl.base_url, 7, j1) is None
+    j1.start()
+    j2 = CreateJob(cl, {"id": 7, "name": "Г"}, devs, NAME, TEXT, cfg)
+    assert registry.claim("create", cl.base_url, 7, j2) is j1  # другий не стартує
+    assert registry.active("create", cl.base_url, 7) == [j1]
+    j1.wait(60)
+    assert registry.claim("create", cl.base_url, 7, j2) is None  # після завершення — можна
+    assert all(n == 1 for n in api.create_calls.values())
+    srv.shutdown()
+
+
+def test_scan_finds_duplicates():
+    api = FakeM2M(n_devices=4, have_cmd=(1, 2))
+    api._add(2, NAME, TEXT)  # другий «NTP» на об'єкті 2
+    cl, srv = connect(api)
+    sc = scan(cl, devices_of(cl), LoadCfg(pause=0))
+    d = sc.duplicates(NAME)
+    assert list(d) == [2] and len(d[2]) == 2
+    srv.shutdown()
