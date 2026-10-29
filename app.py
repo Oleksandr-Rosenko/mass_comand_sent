@@ -1048,8 +1048,6 @@ def stats_tab() -> None:
     else:
         if S.get("owner_error"):
             st.warning(S.owner_error)
-        st.caption(f"Групи користувача **{STATS_OWNER}** ({fmt_n(len(own))}): спершу перевірені, потім з "
-                   f"{' / '.join(STATS_TAGS)} у назві, потім решта.")
 
     def mine(gid) -> bool:
         return own is None or int(gid) in own
@@ -1066,16 +1064,26 @@ def stats_tab() -> None:
     views.sort(key=lambda v: (not v[1]["checked"], -(parse_dt(v[1]["last_run_at"]).timestamp()
                                                      if v[1]["last_run_at"] else 0),
                               not tagged(v[0]["name"]), v[0]["name"].lower()))
+    if own is not None:
+        st.caption(f"Групи користувача **{STATS_OWNER}** ({fmt_n(len(views))}): спершу перевірені, потім з "
+                   f"{' / '.join(STATS_TAGS)} у назві, потім решта. Враховуються лише групи, де є хоча б один "
+                   "об'єкт.")
+    else:
+        st.caption("Враховуються лише групи, де є хоча б один об'єкт.")
     checked = [v for v in views if v[1]["checked"]]
     # унікальні об'єкти: той самий об'єкт може бути в кількох групах
     uniq = {int(i) for v in checked for i in v[0]["deviceIds"]}
     total_obj = len(uniq)
+    total_sent = sum(1 for i in uniq if index.get(i, {}).get("sent_runs"))
     total_acc = sum(1 for i in uniq if index.get(i, {}).get("accepted"))
-    m = st.columns(3)
-    m[0].metric("Груп перевірено", f"{fmt_n(len(checked))} з {fmt_n(len(views))}", border=True)
-    m[1].metric("Об'єктів у перевірених групах", fmt_n(total_obj), border=True,
-                help="Унікальні об'єкти: якщо об'єкт є в кількох групах, рахується один раз")
-    m[2].metric("Прийняли команду", f"{fmt_n(total_acc)}" + (f" ({total_acc / total_obj * 100:.0f}%)"
+    m = st.columns(4)
+    m[0].metric("Груп перевірено", f"{fmt_n(len(checked))} з {fmt_n(len(views))}", border=True,
+                help="Враховуються лише групи, де є хоча б один об'єкт")
+    m[1].metric("Об'єктів у групах", fmt_n(total_obj), border=True,
+                help="Об'єкти перевірених груп. Унікальні: якщо об'єкт є в кількох групах, рахується один раз")
+    m[2].metric("Надіслано на об'єкти", fmt_n(total_sent), border=True,
+                help="Скільки з цих об'єктів хоча б раз отримали команду (унікальні об'єкти, за всі запуски)")
+    m[3].metric("Прийняли команду", f"{fmt_n(total_acc)}" + (f" ({total_acc / total_obj * 100:.0f}%)"
                                                              if total_obj else ""), border=True)
 
     all_rows = []
