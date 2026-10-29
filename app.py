@@ -175,10 +175,15 @@ def host_label(url: str) -> str:
 # пачки по 50 об'єктів, у пачці до 4 запитів одночасно, 2 с паузи між пачками.
 BATCH_SIZE, WORKERS, PAUSE_S, RETRIES = 50, 4, 2.0, 2
 # Відправка йде через той самий сервіс команд (gps.m2m.eu), що віддавав 502 під навантаженням, — обережніше:
-DISPATCH_BATCH, DISPATCH_WORKERS, DISPATCH_PAUSE_S = 25, 2, 5.0
+DISPATCH_BATCH, DISPATCH_WORKERS, DISPATCH_PAUSE_S = 25, 1, 6.0   # по одній команді за раз
 BIG_GROUP = 1000          # від скількох об'єктів таблиця під час запуску спрощується
-POLL_EVERY_S = 15        # як часто читати нові «Результати команд»
-ACTIVITY_EVERY_S = 60    # як часто під час очікування оновлювати «останнє повідомлення» (1 запит на групу)
+POLL_EVERY_S = 30        # як часто читати нові «Результати команд» (лише нове з історії)
+ACTIVITY_EVERY_S = 120   # як часто під час очікування оновлювати «останнє повідомлення» (1 запит на групу)
+ACTIVITY_EVERY_BIG_S = 600  # для груп >BIG_GROUP — список усіх об'єктів групи важкий, тому рідше
+
+
+def activity_every(n_objects: int) -> int:
+    return ACTIVITY_EVERY_BIG_S if n_objects > BIG_GROUP else ACTIVITY_EVERY_S
 
 
 def go_to(tab: int, gid: int | None = None, name: str | None = None, text: str | None = None) -> None:
@@ -742,7 +747,7 @@ def dispatch_tab() -> None:
                  disabled=not targets or any_running()):
         job = DispatchJob(S.client, group_by_id(gid), name, text, targets, skipped, dispatch_cfg(),
                           wait_minutes=float(wait), poll_every=POLL_EVERY_S, online_min=online_min,
-                          activity_every=ACTIVITY_EVERY_S)
+                          activity_every=activity_every(len(devices)))
         other = registry.claim("dispatch", S.client.base_url, gid, job)
         if other is not None:  # на цій групі вже йде відправка — показуємо її, другу не запускаємо
             S.dispatch_job, S.dispatch_stage = other, "progress"
@@ -1100,7 +1105,7 @@ def resend(job: DispatchJob) -> None:
         targets.append((dev, int(r["command_id"])))
     new = DispatchJob(S.client, job.group, job.name, job.text, by_priority(targets), [], dispatch_cfg(),
                       wait_minutes=job.wait_minutes, poll_every=POLL_EVERY_S,
-                      online_min=job.online_min, activity_every=ACTIVITY_EVERY_S)
+                      online_min=job.online_min, activity_every=job.activity_every)
     S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
     S.dispatch_job = new
     if registry.claim("dispatch", S.client.base_url, job.group["id"], new) is not None:
