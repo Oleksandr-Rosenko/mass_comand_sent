@@ -130,7 +130,7 @@ def test_dispatch_and_results(ascending):
     assert sorted(job.not_answered()) == [5, 6, 7]
     assert len(api.dispatched) == 59  # кожному рівно один раз
     # старі результати з історії (до старту) не зараховані
-    assert job.baseline_id == 250
+    assert 250 in job._baseline_ids  # старі записи — у точці відліку
     srv.shutdown()
 
 
@@ -352,4 +352,31 @@ def test_create_survives_gateway_502_wrapped_in_400():
     assert job.max_slowdown > 1 and job.slowdown == 1  # сповільнився, а коли відпустило — повернувся
     for did in (3, 4, 5):
         assert len([c for c in api.commands[did] if c["description"] == NAME]) == 1
+    srv.shutdown()
+
+
+def test_poll_survives_many_answers_and_wrong_timestamps():
+    """Багато відповідей між перевірками (кілька сторінок) і неточний час у записах — нічого не губиться,
+    старі записи (до старту) не зараховуються."""
+    api = FakeM2M(n_devices=260, have_cmd=range(1, 261), answer_delay=0.0)
+    cl, srv = connect(api)
+    devs = {d.id: d for d in devices_of(cl)}
+    targets = [(devs[i], api.commands[i][-1]["id"]) for i in range(2, 261)]  # об'єкт 1 — лише старі записи
+    job = DispatchJob(cl, {"id": 7, "name": "Г"}, NAME, TEXT, targets, [], LoadCfg(batch_size=300, pause=0, workers=8),
+                      wait_minutes=0.05)
+    job.poll_every = 10_000  # не опитувати під час відправки — усі ~259 відповідей прочитаються за раз
+    orig = api._answer_later
+
+    def answer_with_bad_time(did):  # час відповіді «з минулого» (як неточний час трекера)
+        with api.lock:
+            api.history.append({"id": api.next_hist, "type": "COMMAND_RESULT", "deviceId": did, "message": "TSYNC ok",
+                                "createdAt": "2026-10-01T00:00:00Z"})
+            api.next_hist += 1
+    api._answer_later = answer_with_bad_time
+    job.start()
+    job.wait(60)
+    api._answer_later = orig
+    c = job.counts()
+    assert c.get(ANSWERED) == 259, c
+    assert 1 not in [d for d, r in job.rows.items() if r["status"] == ANSWERED]
     srv.shutdown()

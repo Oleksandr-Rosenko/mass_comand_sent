@@ -484,6 +484,9 @@ class DispatchJob(BaseJob):
         self._poll_lock = threading.Lock()
         self._poll_since = self.started_wall - self.CLOCK_SLACK  # читаємо історію лише з цього моменту
         self._seen_ids: set = set()
+        self._baseline_ids: set = set()
+        self._ascending = False
+        self._pages_hint = 1
         self.rows = {}
         for n, (dev, cid) in enumerate(targets, 1):
             self.rows[dev.id] = self._row(dev, QUEUED, command_id=cid, order=n)
@@ -548,44 +551,73 @@ class DispatchJob(BaseJob):
             else:
                 self._set(did, status=ERROR, detail=describe_error(e, PERM_EXECUTE))
 
+    def _take_baseline(self) -> None:
+        """Записи історії, що вже були до старту (їх не рахуємо), і порядок сторінок (нові спочатку чи навпаки)."""
+        first = self.client.history_page(1)
+        items, pages = first["items"], max(first["pages"], 1)
+        dates = [parse_dt(i.get("createdAt")) for i in items]
+        dates = [d for d in dates if d is not None]
+        ids = [i.get("id") for i in items if isinstance(i.get("id"), int)]
+        if len(dates) >= 2 and dates[0] != dates[-1]:
+            self._ascending = dates[0] < dates[-1]   # спершу старі?
+        else:
+            self._ascending = len(ids) >= 2 and ids[0] < ids[-1]
+        self._pages_hint = pages
+        base = items if not self._ascending or pages == 1 else self.client.history_page(pages)["items"]
+        self._baseline_ids = {i.get("id") for i in base if i.get("id") is not None}
+        self.baseline_id = 0  # ознака, що точку відліку взято
+
+    def _scan_new(self, max_pages: int = 100) -> list[dict]:
+        """Нові записи історії: гортаємо від найновіших, доки не трапиться сторінка без жодного нового.
+        Не залежить ні від порядку id, ні від того, наскільки точний час у записах."""
+        out: list[dict] = []
+        first = self.client.history_page(1)
+        pages = max(first["pages"], 1)
+        order = range(pages, 0, -1) if self._ascending else range(1, pages + 1)
+        for n, page in enumerate(order):
+            if n >= max_pages:
+                break
+            items = first["items"] if page == 1 else self.client.history_page(page)["items"]
+            if self._ascending:
+                items = list(reversed(items))  # завжди від найновіших до старших
+            new, reached_old = [], False
+            for it in items:
+                key = it.get("id")
+                if key is not None and key in self._baseline_ids:
+                    reached_old = True  # далі — записи, що були ще до старту запуску
+                    break
+                if key is None or key not in self._seen_ids:
+                    new.append(it)
+            for it in new:
+                if it.get("id") is not None:
+                    self._seen_ids.add(it["id"])
+            out += new
+            if not items or not new or reached_old:
+                break
+        return out
+
     def poll(self) -> int:
         """Читає нові «Результати команд» і проставляє відповіді. Повертає кількість нових відповідей."""
         if self.baseline_id is None:
             return 0
         with self._poll_lock:
             try:
-                # за часом (createdAt), а не за id: номери записів в історії можуть іти не по порядку
-                # лише нове: з часу останньої побаченої відповіді (мінус запас), а не всю історію з початку
-                items = self.client.results_since(self._poll_since)
+                fresh = self._scan_new()
                 self.poll_error = ""
             except ApiError as e:
                 self.poll_error = f"Не вдалося прочитати відповіді: {e}"
                 return 0
             self.last_poll = time.time()
             got = 0
-            newest = None
-            fresh = []
-            for it in items:
-                key = it.get("id")
-                if key is not None and key in self._seen_ids:
-                    continue
-                if key is not None:
-                    self._seen_ids.add(key)
-                fresh.append(it)
-                dt = parse_dt(it.get("createdAt"))
-                if dt is not None and (newest is None or dt > newest):
-                    newest = dt
-            if newest is not None:
-                self._poll_since = max(self._poll_since, newest - self.CLOCK_SLACK)
             for it in fresh:
                 did = result_device_id(it)
                 with self._lock:
                     r = self.rows.get(did) if did is not None else None
                     if not r or r["status"] not in (SENT, NO_ANSWER) or r["sent_at"] is None:
                         continue
+                    # запис з'явився після старту запуску (його не було в точці відліку) — це відповідь;
+                    # час із запису не перевіряємо: він може бути неточним (час трекера / часовий пояс)
                     created = parse_dt(it.get("createdAt"))
-                    if created is not None and created < r["sent_at"] - self.CLOCK_SLACK:
-                        continue
                     r.update(status=ANSWERED, answer=clean_message(it.get("message")),
                              answered_at=created or now_utc())
                     got += 1
@@ -634,8 +666,7 @@ class DispatchJob(BaseJob):
         if self.baseline_id is None:
             self.phase = "baseline"
             self.message = "Читаю історію сповіщень (точка відліку)"
-            self.baseline_id = self.client.latest_result_id()
-            self.last_id = self.baseline_id
+            self._take_baseline()
         self.phase, self.message = "sending", ""
         todo = [did for did, r in self.rows.items() if r["status"] == QUEUED]
         self._run_batches(todo, self._send_one, between=self._maybe_poll)
