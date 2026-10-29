@@ -85,8 +85,11 @@ def merge_run(doc: dict | None, *, name: str, text: str, group: dict, run_id: st
                            answered_at=_iso(new) or rec["answered_at"])
         elif not rec["accepted"]:
             if st == SKIPPED:
-                if not rec["sent_runs"]:  # ще жодного разу не надсилали — показуємо причину пропуску
-                    rec.update(status=r.get("detail") or "Пропущено", detail="")
+                detail = r.get("detail") or ""
+                if detail.startswith("Вже прийняв команду"):  # прийняв раніше (в іншій групі / запуску)
+                    rec.update(accepted=True, status=ACCEPTED, detail=f"{detail} — раніше, в іншому запуску")
+                elif not rec["sent_runs"]:  # ще жодного разу не надсилали — показуємо причину пропуску
+                    rec.update(status=detail or "Пропущено", detail="")
             else:
                 rec.update(status=NOT_ACCEPTED.get(st, LABELS.get(st, st)), detail=r.get("detail") or "")
     g["runs"][run_id] = {"started_at": _iso(started_at), "sent": sent, "answered": answered}

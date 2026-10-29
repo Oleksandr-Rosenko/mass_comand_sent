@@ -454,6 +454,8 @@ class DispatchJob(BaseJob):
         self.started_wall = now_utc()
         self._stop_wait = threading.Event()
         self._poll_lock = threading.Lock()
+        self._poll_since = self.started_wall - self.CLOCK_SLACK  # читаємо історію лише з цього моменту
+        self._seen_ids: set = set()
         self.rows = {}
         for n, (dev, cid) in enumerate(targets, 1):
             self.rows[dev.id] = self._row(dev, QUEUED, command_id=cid, order=n)
@@ -523,14 +525,29 @@ class DispatchJob(BaseJob):
         with self._poll_lock:
             try:
                 # за часом (createdAt), а не за id: номери записів в історії можуть іти не по порядку
-                items = self.client.results_since(self.started_wall - self.CLOCK_SLACK)
+                # лише нове: з часу останньої побаченої відповіді (мінус запас), а не всю історію з початку
+                items = self.client.results_since(self._poll_since)
                 self.poll_error = ""
             except ApiError as e:
                 self.poll_error = f"Не вдалося прочитати відповіді: {e}"
                 return 0
             self.last_poll = time.time()
             got = 0
+            newest = None
+            fresh = []
             for it in items:
+                key = it.get("id")
+                if key is not None and key in self._seen_ids:
+                    continue
+                if key is not None:
+                    self._seen_ids.add(key)
+                fresh.append(it)
+                dt = parse_dt(it.get("createdAt"))
+                if dt is not None and (newest is None or dt > newest):
+                    newest = dt
+            if newest is not None:
+                self._poll_since = max(self._poll_since, newest - self.CLOCK_SLACK)
+            for it in fresh:
                 did = result_device_id(it)
                 with self._lock:
                     r = self.rows.get(did) if did is not None else None

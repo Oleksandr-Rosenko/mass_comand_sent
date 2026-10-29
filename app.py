@@ -173,6 +173,7 @@ def host_label(url: str) -> str:
 # Навантаження — фіксоване, перевірене на групі з 534 об'єктів; підходить і для 100, і для 500+:
 # пачки по 50 об'єктів, у пачці до 4 запитів одночасно, 2 с паузи між пачками.
 BATCH_SIZE, WORKERS, PAUSE_S, RETRIES = 50, 4, 2.0, 2
+BIG_GROUP = 1000          # від скількох об'єктів таблиця під час запуску спрощується
 POLL_EVERY_S = 15        # як часто читати нові «Результати команд»
 ACTIVITY_EVERY_S = 60    # як часто під час очікування оновлювати «останнє повідомлення» (1 запит на групу)
 
@@ -475,7 +476,7 @@ def create_tab() -> None:
 
 
 def create_progress(job: CreateJob) -> None:
-    run_every = 1 if job.running else None
+    run_every = (3 if job.total > BIG_GROUP else 1) if job.running else None
 
     @st.fragment(run_every=run_every)
     def live() -> None:
@@ -532,7 +533,9 @@ def create_progress(job: CreateJob) -> None:
                                    format_func=lambda k: f"{filters[k][0]} · {fmt_n(len(rows) if k == 'all' else c.get(k, 0))}")
         keep = filters.get(flt or "all", filters["all"])[1]
         view = df[[keep is None or r["status"] in keep for r in rows]] if len(df) else df
-        st.dataframe(styled(view), hide_index=True, width="stretch", height=420, column_config=col_cfg(view))
+        big = job.running and len(view) > BIG_GROUP  # великі групи під час запуску — без розфарбування (швидше)
+        st.dataframe(view if big else styled(view), hide_index=True, width="stretch", height=420,
+                     column_config=col_cfg(view))
         if run_every and not job.running:
             st.rerun()
 
@@ -1026,7 +1029,8 @@ def resend(job: DispatchJob) -> None:
 
 
 def dispatch_progress(job: DispatchJob) -> None:
-    run_every = 1 if job.running or job.save_state[0] in ("pending", "saving") else None
+    busy = job.running or job.save_state[0] in ("pending", "saving")
+    run_every = (3 if len(job.rows) > BIG_GROUP else 1) if busy else None
 
     @st.fragment(run_every=run_every)
     def live() -> None:
@@ -1174,7 +1178,11 @@ def dispatch_progress(job: DispatchJob) -> None:
                                    format_func=lambda k: f"{filters[k][0]} · {fmt_n(count(k))}")
         keep = filters.get(flt or "all", filters["all"])[1]
         view = df[[keep is None or r["status"] in keep for r in rows]] if len(df) else df
-        st.dataframe(styled(view), hide_index=True, width="stretch", height=560, column_config=col_cfg(view))
+        big = job.running and len(view) > BIG_GROUP
+        st.dataframe(view if big else styled(view), hide_index=True, width="stretch", height=560,
+                     column_config=col_cfg(view))
+        if big:
+            st.caption("Велика група: під час запуску таблиця оновлюється раз на 3 с і без кольорів, щоб не гальмувати.")
         if run_every and not job.running and job.save_state[0] not in ("pending", "saving"):
             S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
             st.rerun()
