@@ -35,10 +35,10 @@
      "status": "Прийняв"
     },
     "4281": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:30:43.573000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:30:21.924000+00:00",
      "last_sent": "2026-10-28T15:24:14.083049+00:00",
@@ -46,13 +46,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4285": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T19:02:31.359000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T15:02:10.665000+00:00",
      "last_sent": "2026-10-28T15:24:12.747527+00:00",
@@ -60,7 +60,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4288": {
      "accepted": true,
@@ -91,10 +91,10 @@
      "status": "Прийняв"
     },
     "4323": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:37:31.445000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:37:14.511000+00:00",
      "last_sent": "2026-10-28T15:24:14.080112+00:00",
@@ -102,7 +102,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4324": {
      "accepted": true,
@@ -119,10 +119,10 @@
      "status": "Прийняв"
     },
     "4325": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:20:20.314000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:19:53.774000+00:00",
      "last_sent": "2026-10-28T15:24:15.181286+00:00",
@@ -130,13 +130,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4326": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:15:29.635000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:15:08.955000+00:00",
      "last_sent": "2026-10-28T15:24:15.676204+00:00",
@@ -144,13 +144,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4328": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:20:12.655000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:19:49.220000+00:00",
      "last_sent": "2026-10-28T15:24:15.573311+00:00",
@@ -158,7 +158,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4329": {
      "accepted": true,
@@ -189,10 +189,10 @@
      "status": "Прийняв"
     },
     "4332": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:47:34.932000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:47:28.434000+00:00",
      "last_sent": "2026-10-28T15:24:13.214779+00:00",
@@ -200,7 +200,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4333": {
      "accepted": true,
@@ -217,10 +217,10 @@
      "status": "Прийняв"
     },
     "4336": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:30:36.793000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:30:15.504000+00:00",
      "last_sent": "2026-10-28T15:24:14.414226+00:00",
@@ -228,7 +228,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4339": {
      "accepted": true,
@@ -245,10 +245,10 @@
      "status": "Прийняв"
     },
     "4340": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:27:30.546000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:27:17.480000+00:00",
      "last_sent": "2026-10-28T15:24:14.528258+00:00",
@@ -256,13 +256,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4341": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:37:37.684000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:37:15.527000+00:00",
      "last_sent": "2026-10-28T15:24:13.715038+00:00",
@@ -270,7 +270,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4342": {
      "accepted": true,
@@ -287,10 +287,10 @@
      "status": "Прийняв"
     },
     "4343": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:24:52.919000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:24:28.880000+00:00",
      "last_sent": "2026-10-28T15:24:15.015962+00:00",
@@ -298,7 +298,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4347": {
      "accepted": false,
@@ -315,10 +315,10 @@
      "status": "Надіслано, відповіді немає — повторити"
     },
     "4350": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:28:13.094000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:27:51.953000+00:00",
      "last_sent": "2026-10-28T15:24:14.523456+00:00",
@@ -326,13 +326,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4351": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T19:03:46.894000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T15:03:25.036000+00:00",
      "last_sent": "2026-10-28T15:24:12.746354+00:00",
@@ -340,7 +340,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4352": {
      "accepted": true,
@@ -371,10 +371,10 @@
      "status": "Прийняв"
     },
     "4354": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:21:47.118000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:21:26.292000+00:00",
      "last_sent": "2026-10-28T15:24:15.179744+00:00",
@@ -382,7 +382,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4355": {
      "accepted": true,
@@ -399,10 +399,10 @@
      "status": "Прийняв"
     },
     "4356": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:24:59.722000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:24:42.549000+00:00",
      "last_sent": "2026-10-28T15:24:15.010913+00:00",
@@ -410,13 +410,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4358": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T19:15:23.878000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T15:15:05.115000+00:00",
      "last_sent": "2026-10-28T15:24:12.218305+00:00",
@@ -424,13 +424,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4439": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T19:02:25.422000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T15:02:09.546000+00:00",
      "last_sent": "2026-10-28T15:24:13.116036+00:00",
@@ -438,13 +438,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4442": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T19:15:13.463000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T15:14:47.682000+00:00",
      "last_sent": "2026-10-28T15:24:12.219082+00:00",
@@ -452,13 +452,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4443": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:19:50.645000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:19:27.124000+00:00",
      "last_sent": "2026-10-28T15:24:15.609767+00:00",
@@ -466,13 +466,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4448": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T19:14:42.667000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T15:14:21.041000+00:00",
      "last_sent": "2026-10-28T15:24:12.742394+00:00",
@@ -480,13 +480,13 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4452": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:16:59.621000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:16:45.379000+00:00",
      "last_sent": "2026-10-28T15:24:15.612520+00:00",
@@ -494,7 +494,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4453": {
      "accepted": true,
@@ -553,10 +553,10 @@
      "status": "Прийняв"
     },
     "4486": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:53:19.386000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:52:59.766000+00:00",
      "last_sent": "2026-10-28T15:24:13.213329+00:00",
@@ -564,7 +564,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4490": {
      "accepted": true,
@@ -595,10 +595,10 @@
      "status": "Прийняв"
     },
     "4492": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T19:10:04.937000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T15:09:43.761000+00:00",
      "last_sent": "2026-10-28T15:24:12.744360+00:00",
@@ -606,7 +606,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4493": {
      "accepted": true,
@@ -623,10 +623,10 @@
      "status": "Прийняв"
     },
     "4500": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:58:20.580000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:57:59.206000+00:00",
      "last_sent": "2026-10-28T15:24:13.212105+00:00",
@@ -634,7 +634,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4512": {
      "accepted": true,
@@ -693,10 +693,10 @@
      "status": "Прийняв"
     },
     "4518": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:30:33.189000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:30:11.961000+00:00",
      "last_sent": "2026-10-28T15:24:14.415525+00:00",
@@ -704,7 +704,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4549": {
      "accepted": true,
@@ -721,10 +721,10 @@
      "status": "Прийняв"
     },
     "4554": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:37:13.407000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:36:51.754000+00:00",
      "last_sent": "2026-10-28T15:24:14.081012+00:00",
@@ -732,7 +732,7 @@
      "sent_runs": [
       "e68c0bb59bd1"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     }
    },
    "last_run_at": "2026-10-28T15:24:11.520062+00:00",
@@ -931,10 +931,10 @@
      "status": "Прийняв"
     },
     "4123": {
-     "accepted": false,
-     "answer": "",
-     "answered_at": null,
-     "detail": "Очікування зупинено · на зв'язок не виходив",
+     "accepted": true,
+     "answer": "TSYNC is now allowed from NTP NITZ",
+     "answered_at": "2026-10-28T18:20:05.210000+02:00",
+     "detail": "Зараховано з історії сповіщень",
      "imei": "",
      "last_message": "2026-10-28T14:19:45.684000+00:00",
      "last_sent": "2026-10-28T14:31:28.135251+00:00",
@@ -942,7 +942,7 @@
      "sent_runs": [
       "feb7b8fc0ba3"
      ],
-     "status": "Надіслано, відповіді немає — повторити"
+     "status": "Прийняв"
     },
     "4127": {
      "accepted": true,
@@ -1027,6 +1027,6 @@
    }
   }
  },
- "updated_at": "2026-10-28T16:11:31.537251+00:00",
+ "updated_at": "2026-10-29T08:04:01.226744+00:00",
  "version": 1
 }
