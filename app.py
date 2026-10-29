@@ -661,6 +661,19 @@ def dispatch_tab() -> None:
         return
     if S.pop("auto_scan", None) == gid and S.scans.get(gid) is None and devices:
         start_scan(gid)
+    err_name = S.get("last_name") or DEFAULT_NAME
+    err_text = S.get("c_text") or DEFAULT_TEXT
+    err_devs = stats_error_devices(gid, devices, err_name, err_text)
+    if err_devs and not any_running():
+        with st.container(border=True):
+            st.markdown(f"**{n_obj(len(err_devs), OBJ_LOC)} цієї групи — «Помилка відправки» «{err_name}»** "
+                        "(за статистикою)")
+            e1, e2 = st.columns([1, 2], vertical_alignment="center")
+            if e1.button(f"Надіслати тільки їм ({fmt_n(len(err_devs))})", key=f"d_err_{gid}", width="stretch"):
+                resend_fresh(group_by_id(gid), err_name, err_text, err_devs, float(S.get("d_wait", 15)),
+                             float(S.get("d_online", 5)), activity_every(len(err_devs)))
+            e2.caption("Заново прочитає команди цих об'єктів, за потреби створить і надішле лише їм — "
+                       "без перевірки всієї групи.")
     scan = scan_block(gid, devices, "d", "Щоб вибрати команду, прочитаю команди кожного об'єкта групи "
                                          "(пачками, щоб не навантажувати сервер).")
     if scan is None:
@@ -1115,46 +1128,64 @@ def resend(job: DispatchJob) -> None:
     new.start()
 
 
-def retry_send_errors(job: DispatchJob) -> None:
-    """Лише для об'єктів зі статусом «Помилка»: заново читає їхні команди (ID могла змінитись), за потреби
-    створює команду і надсилає тільки їм — без повторного проходу по всій групі."""
-    err_ids = [did for did, r in job.rows.items() if r["status"] == ERROR]
-    devices = {d.id: d for d in S.devices.get(job.group["id"], [])}
+def resend_fresh(group: dict, name: str, text: str, devs: list[Device], wait_minutes: float,
+                 online_min: float, activity_every_s: float, prev: DispatchJob | None = None) -> None:
+    """Надсилає лише вказаним об'єктам: заново читає їхні команди (ID могла змінитись), за потреби створює
+    команду. Без проходу по всій групі."""
     targets, failed = [], []
-    bar = st.progress(0.0, text="Готую команди для об'єктів з помилкою…")
-    for n, did in enumerate(err_ids, 1):
-        r = job.rows[did]
-        dev = devices.get(did) or Device(id=did, name=r["name"], imei=r["imei"], last_message=r["last_message"])
+    bar = st.progress(0.0, text="Готую команди…")
+    for n, dev in enumerate(devs, 1):
         try:
-            cmds = [Command.from_api(c) for c in S.client.device_commands(did) if c.get("id") is not None]
-            same = [c for c in find_by_name(cmds, job.name) if c.text == job.text]
+            cmds = [Command.from_api(c) for c in S.client.device_commands(dev.id) if c.get("id") is not None]
+            same = [c for c in find_by_name(cmds, name) if c.text == text]
             if same:
                 cid = same[0].id
             else:
-                cid = (S.client.create_command(did, job.name, job.text) or {}).get("id")
+                cid = (S.client.create_command(dev.id, name, text) or {}).get("id")
                 if cid is None:
                     raise ApiError("сервер не повернув ID створеної команди")
             targets.append((dev, int(cid)))
         except ApiError as e:
             failed.append((dev, f"Не вдалося підготувати команду: {describe_error(e, PERM_CREATE)}"))
-        bar.progress(n / len(err_ids), text=f"Готую команди: {n} з {len(err_ids)}")
+        bar.progress(n / len(devs), text=f"Готую команди: {n} з {len(devs)}")
         time.sleep(0.3)  # м'яко до сервера команд
     if not targets:
-        st.warning("Жодному з об'єктів з помилкою не вдалося підготувати команду: " +
+        st.warning("Жодному об'єкту не вдалося підготувати команду: " +
                    "; ".join(f"{d.name}: {why}" for d, why in failed[:5]))
         return
-    new = DispatchJob(S.client, job.group, job.name, job.text, by_priority(targets), failed, dispatch_cfg(),
-                      wait_minutes=job.wait_minutes, poll_every=POLL_EVERY_S,
-                      online_min=job.online_min, activity_every=job.activity_every)
-    if registry.claim("dispatch", S.client.base_url, job.group["id"], new) is not None:
+    new = DispatchJob(S.client, group, name, text, by_priority(targets), failed, dispatch_cfg(),
+                      wait_minutes=wait_minutes, poll_every=POLL_EVERY_S, online_min=online_min,
+                      activity_every=activity_every_s)
+    if registry.claim("dispatch", S.client.base_url, group["id"], new) is not None:
         st.warning("На цій групі вже йде інша відправка — спробуйте після її завершення.")
         return
-    S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
-    S.dispatch_job = new
+    if prev is not None:
+        S.prev_dispatch[(group["id"], name, text)] = prev
+    S.dispatch_job, S.dispatch_stage = new, "progress"
     register_run(new)
     attach_persist(new)
     new.start()
     st.rerun()
+
+
+def retry_send_errors(job: DispatchJob) -> None:
+    """Повтор лише для об'єктів зі статусом «Помилка» в цьому запуску."""
+    devices = {d.id: d for d in S.devices.get(job.group["id"], [])}
+    devs = [devices.get(did) or Device(id=did, name=r["name"], imei=r["imei"], last_message=r["last_message"])
+            for did, r in job.rows.items() if r["status"] == ERROR]
+    resend_fresh(job.group, job.name, job.text, devs, job.wait_minutes, job.online_min, job.activity_every, prev=job)
+
+
+def stats_error_devices(gid: int, devices: list[Device], name: str, text: str) -> list[Device]:
+    """Об'єкти групи, у яких за статистикою «Помилка відправки» і які ще не прийняли команду."""
+    store = get_store()
+    docs, _ = load_docs(store) if store else (local_docs(), "local")
+    doc = docs.get(command_dir(name, text))
+    if not doc:
+        return []
+    index = device_index(doc)
+    return [d for d in devices if (rec := index.get(d.id)) and not rec["accepted"]
+            and str(rec.get("status", "")).startswith("Помилка відправки")]
 
 
 def dispatch_progress(job: DispatchJob) -> None:
