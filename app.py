@@ -174,6 +174,8 @@ def host_label(url: str) -> str:
 # Навантаження — фіксоване, перевірене на групі з 534 об'єктів; підходить і для 100, і для 500+:
 # пачки по 50 об'єктів, у пачці до 4 запитів одночасно, 2 с паузи між пачками.
 BATCH_SIZE, WORKERS, PAUSE_S, RETRIES = 50, 4, 2.0, 2
+# Відправка йде через той самий сервіс команд (gps.m2m.eu), що віддавав 502 під навантаженням, — обережніше:
+DISPATCH_BATCH, DISPATCH_WORKERS, DISPATCH_PAUSE_S = 25, 2, 5.0
 BIG_GROUP = 1000          # від скількох об'єктів таблиця під час запуску спрощується
 POLL_EVERY_S = 15        # як часто читати нові «Результати команд»
 ACTIVITY_EVERY_S = 60    # як часто під час очікування оновлювати «останнє повідомлення» (1 запит на групу)
@@ -183,6 +185,10 @@ def go_to(tab: int, gid: int | None = None, name: str | None = None, text: str |
     """Перейти на вкладку (0, 1, 2) з уже вибраними групою й командою."""
     S.nav_pending = {"tab": TABS[tab], "gid": gid, "name": name, "text": text}
     st.rerun()
+
+
+def dispatch_cfg() -> LoadCfg:
+    return LoadCfg(batch_size=DISPATCH_BATCH, pause=DISPATCH_PAUSE_S, workers=DISPATCH_WORKERS)
 
 
 def load_cfg() -> LoadCfg:
@@ -404,8 +410,9 @@ def sidebar() -> None:
         )
         busy = any_running()
         client.retries = RETRIES
-        st.caption(f"Запити йдуть пачками по {BATCH_SIZE} об'єктів, до {WORKERS} одночасно, з паузою "
-                   f"{PAUSE_S:g} с — щоб не навантажувати сервер.")
+        st.caption(f"Перевірка й створення: пачки по {BATCH_SIZE}, до {WORKERS} одночасно, пауза {PAUSE_S:g} с. "
+                   f"Відправка: пачки по {DISPATCH_BATCH}, до {DISPATCH_WORKERS} одночасно, пауза "
+                   f"{DISPATCH_PAUSE_S:g} с. Якщо сервер захлинається — пауза збільшується сама.")
         if st.button("Вийти", disabled=busy, width="stretch"):
             for k in list(S.keys()):
                 del S[k]
@@ -733,7 +740,7 @@ def dispatch_tab() -> None:
     b1, b2 = st.columns([2, 3], vertical_alignment="center")
     if b1.button(f"Надіслати на {n_obj(len(targets))}", type="primary", width="stretch",
                  disabled=not targets or any_running()):
-        job = DispatchJob(S.client, group_by_id(gid), name, text, targets, skipped, load_cfg(),
+        job = DispatchJob(S.client, group_by_id(gid), name, text, targets, skipped, dispatch_cfg(),
                           wait_minutes=float(wait), poll_every=POLL_EVERY_S, online_min=online_min,
                           activity_every=ACTIVITY_EVERY_S)
         other = registry.claim("dispatch", S.client.base_url, gid, job)
@@ -748,6 +755,11 @@ def dispatch_tab() -> None:
     if reasons:
         b2.caption("Пропускаємо: " + "; ".join(f"{r[:1].lower() + r[1:]} — {fmt_n(n)}" for r, n in
                                                 sorted(reasons.items(), key=lambda x: -x[1])))
+    if len(targets) > 200:
+        batches = -(-len(targets) // DISPATCH_BATCH)
+        est = batches * (DISPATCH_PAUSE_S + DISPATCH_BATCH / DISPATCH_WORKERS * 0.4) / 60
+        st.caption(f"Відправка займе орієнтовно {est:.0f} хв ({fmt_n(batches)} пачок по {DISPATCH_BATCH}), "
+                   f"далі — {int(wait)} хв очікування відповідей. Не перезапускайте апку, поки йде запуск.")
 
 
 def register_run(job: DispatchJob) -> None:
@@ -1086,7 +1098,7 @@ def resend(job: DispatchJob) -> None:
         r = job.rows[did]
         dev = devices.get(did) or Device(id=did, name=r["name"], imei=r["imei"], last_message=r["last_message"])
         targets.append((dev, int(r["command_id"])))
-    new = DispatchJob(S.client, job.group, job.name, job.text, by_priority(targets), [], load_cfg(),
+    new = DispatchJob(S.client, job.group, job.name, job.text, by_priority(targets), [], dispatch_cfg(),
                       wait_minutes=job.wait_minutes, poll_every=POLL_EVERY_S,
                       online_min=job.online_min, activity_every=ACTIVITY_EVERY_S)
     S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
