@@ -150,3 +150,21 @@ def test_late_answers_from_history_are_applied(gh):
     assert sync_docs(cl, store, {f: store.read_doc(f) for f in store.list_folders()}) == (0, "")
     assert len(fake.commits) == commits  # нічого нового — без коміту
     srv.shutdown()
+
+
+def test_group_view_uses_runs_from_other_groups():
+    """Запуск на велику групу оновлює статистику менших груп, де є ці об'єкти."""
+    from m2m_commands.stats import device_index, group_view
+    big = {"id": 100, "name": "Всі генератори", "deviceIds": [1, 2, 3, 4]}
+    doc = merge_run(None, name=NAME, text=TEXT, group=big, run_id="big", started_at=T0,
+                    rows=[row(1, ANSWERED, "ok"), row(2, NO_ANSWER), row(3, ANSWERED, "ok"),
+                          row(4, SKIPPED, detail="Вже прийняв команду (28.10.2026 17:24)", sent=False)])
+    idx = device_index(doc)
+    small, rows, untouched = group_view(idx, [1, 2, 9])  # 9 — об'єкт, якого не чіпали
+    assert (small["objects"], small["accepted"], small["sent"], small["checked"]) == (3, 1, 2, True)
+    assert untouched == 1
+    assert rows[0]["Через групу"] == "Всі генератори"
+    other, _, _ = group_view(idx, [4])
+    assert other["accepted"] == 1  # «вже прийняв» раніше — рахується
+    none, _, u = group_view(idx, [50, 51])
+    assert (none["checked"], u) == (False, 2)

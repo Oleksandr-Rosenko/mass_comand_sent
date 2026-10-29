@@ -19,10 +19,10 @@ from m2m_commands.sync import sync_docs
 from m2m_commands.jobs import (
     ACTIVITY_LABELS, ANSWERED, CREATED, ERROR, LABELS, NO_ANSWER, NOT_SENT, ONLINE, PERM_CREATE, PERM_EXECUTE,
     QUEUED, RUNNING, SENT, SKIPPED, STALE, TODAY, CreateJob, Device, DispatchJob, LoadCfg, ScanJob, activity,
-    by_priority, days_ago, find_by_name, now_utc,
+    by_priority, days_ago, find_by_name, now_utc, parse_dt,
 )
-from m2m_commands.stats import (apply_history, command_dir, device_rows, fmt_local, group_summary, history_since,
-                                merge_run, objects_table)
+from m2m_commands.stats import (apply_history, command_dir, device_index, fmt_local, group_view,
+                                history_since, merge_run)
 
 try:
     LOCAL_TZ = ZoneInfo("Europe/Kyiv")
@@ -969,25 +969,41 @@ def stats_tab() -> None:
     def mine(gid) -> bool:
         return own is None or int(gid) in own
 
-    checked = sorted(((gid, g) for gid, g in doc["groups"].items() if mine(gid)),
-                     key=lambda kv: kv[1].get("last_run_at") or "", reverse=True)
-    sums = {gid: group_summary(g) for gid, g in checked}
-    total_obj = sum(x["objects"] for x in sums.values())
-    total_acc = sum(x["accepted"] for x in sums.values())
-    unchecked = sorted((g for g in S.groups if str(g["id"]) not in doc["groups"] and mine(g["id"])),
-                       key=lambda g: (not tagged(g["name"]), g["name"].lower()))
+    # Статистика по об'єктах з усіх запусків: група показується за своїм складом, хоч би через яку групу
+    # надсилали (напр., запуск на велику групу оновлює всі менші, де є ці об'єкти).
+    index = device_index(doc)
+    views = []
+    for g in S.groups:
+        if not mine(g["id"]):
+            continue
+        summary, rows, untouched = group_view(index, [int(i) for i in g["deviceIds"]])
+        views.append((g, summary, rows, untouched))
+    views.sort(key=lambda v: (not v[1]["checked"], -(parse_dt(v[1]["last_run_at"]).timestamp()
+                                                     if v[1]["last_run_at"] else 0),
+                              not tagged(v[0]["name"]), v[0]["name"].lower()))
+    checked = [v for v in views if v[1]["checked"]]
+    # унікальні об'єкти: той самий об'єкт може бути в кількох групах
+    uniq = {int(i) for v in checked for i in v[0]["deviceIds"]}
+    total_obj = len(uniq)
+    total_acc = sum(1 for i in uniq if index.get(i, {}).get("accepted"))
     m = st.columns(3)
-    m[0].metric("Груп перевірено", f"{fmt_n(len(checked))} з {fmt_n(len(checked) + len(unchecked))}", border=True)
-    m[1].metric("Об'єктів у перевірених групах", fmt_n(total_obj), border=True)
+    m[0].metric("Груп перевірено", f"{fmt_n(len(checked))} з {fmt_n(len(views))}", border=True)
+    m[1].metric("Об'єктів у перевірених групах", fmt_n(total_obj), border=True,
+                help="Унікальні об'єкти: якщо об'єкт є в кількох групах, рахується один раз")
     m[2].metric("Прийняли команду", f"{fmt_n(total_acc)}" + (f" ({total_acc / total_obj * 100:.0f}%)"
                                                              if total_obj else ""), border=True)
 
-    for gid, g in checked:
-        x = sums[gid]
+    all_rows = []
+    for g, x, rows, untouched in views:
+        all_rows += [{"Група": g["name"], **r} for r in rows]
+        if not x["checked"]:
+            with st.expander(f"**{g['name']}** · {n_obj(x['objects'])} · :gray[не перевірялась]"):
+                st.caption(f"Команду «{name}» об'єктам цієї групи ще не надсилали.")
+            continue
         label = (f"**{g['name']}** · {n_obj(x['objects'])} · :green[прийняли {fmt_n(x['accepted'])}] з "
-                 f"{fmt_n(x['objects'])} ({x['percent']}%) · перевірено {fmt_local(x['last_run_at'])}")
+                 f"{fmt_n(x['objects'])} ({x['percent']}%) · надсилали {fmt_n(x['sent'])} · "
+                 f"останнє {fmt_local(x['last_run_at'])}")
         with st.expander(label):
-            rows = device_rows(g)
             df = pd.DataFrame(rows)
             view = pd.DataFrame([{
                 "Прийняв": r["Прийняв"], "Об'єкт": r["Об'єкт"],
@@ -997,17 +1013,14 @@ def stats_tab() -> None:
             st.dataframe(styled(view, "Прийняв"), hide_index=True, width="stretch", column_config=col_cfg(view),
                          height=min(420, 40 + 35 * max(1, len(rows))))
             c1, c2 = st.columns([3, 1], vertical_alignment="center")
-            c1.caption(f"Спершу ті, що прийняли, потім ті, що ні. «Разів надіслано» — скільки разів цьому об'єкту "
-                       f"надсилали команду. Запусків на цій групі: {x['runs']}.")
-            c2.download_button("CSV групи", csv_bytes(df), width="stretch", key=f"st_csv_{gid}",
+            extra = f" Ще {n_obj(untouched)} групи команду не надсилали." if untouched else ""
+            c1.caption("Спершу ті, що прийняли, потім ті, що ні. Враховано всі запуски, через яку б групу не "
+                       f"надсилали (у CSV — колонка «Через групу»).{extra}")
+            c2.download_button("CSV групи", csv_bytes(df), width="stretch", key=f"st_csv_{g['id']}",
                                file_name=f"{name}_{g['name']}_{datetime.now(LOCAL_TZ):%Y%m%d}.csv", mime="text/csv")
-    for g in unchecked:
-        with st.expander(f"**{g['name']}** · {n_obj(len(g['deviceIds']))} · :gray[не перевірялась]"):
-            st.caption(f"Команду «{name}» на цій групі ще не запускали.")
-    full = {**doc, "groups": {gid: g for gid, g in doc["groups"].items() if mine(gid)}}
-    st.download_button("Завантажити всю статистику (CSV)", csv_bytes(pd.DataFrame(objects_table(full))),
+    st.download_button("Завантажити всю статистику (CSV)", csv_bytes(pd.DataFrame(all_rows)),
                        key="st_csv_all", file_name=f"{name}_усі_групи_{datetime.now(LOCAL_TZ):%Y%m%d}.csv",
-                       mime="text/csv")
+                       mime="text/csv", disabled=not all_rows)
 
 
 def resend(job: DispatchJob) -> None:

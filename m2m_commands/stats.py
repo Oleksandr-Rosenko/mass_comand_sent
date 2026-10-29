@@ -197,6 +197,46 @@ def device_rows(g: dict) -> list[dict]:
     } for did, d in items]
 
 
+def device_index(doc: dict) -> dict[int, dict]:
+    """Підсумок по кожному об'єкту з усіх запусків, незалежно від групи, через яку надсилали.
+    «Прийняв» має пріоритет; «Разів надіслано» — кількість різних запусків."""
+    idx: dict[int, dict] = {}
+    for g in doc.get("groups", {}).values():
+        for did, rec in g["devices"].items():
+            d = int(did)
+            cur = idx.get(d)
+            if cur is None:
+                idx[d] = {**rec, "sent_runs": list(rec.get("sent_runs", [])), "via": g.get("name", "")}
+                continue
+            runs = list(dict.fromkeys(cur["sent_runs"] + list(rec.get("sent_runs", []))))
+            last_sent = max((x for x in (cur.get("last_sent"), rec.get("last_sent")) if x), default=None,
+                            key=lambda v: parse_dt(v))
+            better = (rec["accepted"] and not cur["accepted"]) or (
+                not rec["accepted"] and not cur["accepted"] and len(rec.get("sent_runs", [])) > len(cur["sent_runs"]))
+            if better:
+                idx[d] = {**rec, "via": g.get("name", "")}
+            idx[d]["sent_runs"], idx[d]["last_sent"] = runs, last_sent
+    return idx
+
+
+def group_view(index: dict[int, dict], device_ids: list[int]) -> tuple[dict, list[dict], int]:
+    """Статистика групи за її складом: (підсумок, рядки об'єктів, скільки об'єктів ще не чіпали)."""
+    recs = {str(i): index[i] for i in device_ids if i in index}
+    touched = {k: r for k, r in recs.items() if r["accepted"] or r.get("sent_runs")}
+    last = max((r.get("last_sent") or r.get("answered_at") for r in touched.values()
+                if r.get("last_sent") or r.get("answered_at")), default=None, key=lambda v: parse_dt(v))
+    accepted = sum(1 for r in recs.values() if r["accepted"])
+    total = len(device_ids)
+    summary = {"objects": total, "accepted": accepted, "sent": sum(1 for r in recs.values() if r.get("sent_runs")),
+               "percent": round(accepted / total * 100) if total else 0, "last_run_at": last,
+               "checked": bool(touched)}
+    rows = device_rows({"devices": recs})
+    for r in rows:
+        via = recs[str(r["ID об'єкта"])].get("via")
+        r["Через групу"] = via or ""
+    return summary, rows, total - len(recs)
+
+
 def _csv(rows: list[dict]) -> str:
     if not rows:
         return ""
