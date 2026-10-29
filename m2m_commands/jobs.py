@@ -183,6 +183,9 @@ class BaseJob:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.on_finish = None   # callable(job) — викликається у фоновому потоці після завершення
+        self.overload_hits = 0  # скільки разів у поточній пачці сервер відповів «перевантажений»
+        self.slowdown = 1.0     # множник паузи між пачками (зростає, коли сервер захлинається)
+        self.max_slowdown = 1.0
         self.finish_error = ""
 
     @property
@@ -252,11 +255,24 @@ class BaseJob:
                 return False
             self.batch_no = b + 1
             chunk = ids[b * size:(b + 1) * size]
-            with ThreadPoolExecutor(max_workers=max(1, int(self.cfg.workers))) as ex:
+            self.overload_hits = 0
+            workers = 1 if self.slowdown >= 4 else max(1, int(self.cfg.workers))
+            with ThreadPoolExecutor(max_workers=workers) as ex:
                 list(ex.map(lambda did: None if stop.is_set() else fn(did), chunk))
             if between:
                 between()
-            if b < self.batch_total - 1 and self.cfg.pause > 0 and stop.wait(self.cfg.pause):
+            # сервер захлинається — сповільнюємось (до ×8), відпустило — поступово повертаємось
+            if self.overload_hits:
+                self.slowdown = min(8.0, self.slowdown * 2)
+                self.max_slowdown = max(self.max_slowdown, self.slowdown)
+                self.message = (f"Сервер команд перевантажений — сповільнюю: пауза "
+                                f"{self.cfg.pause * self.slowdown:g} с між пачками")
+            elif self.slowdown > 1:
+                self.slowdown = max(1.0, self.slowdown / 2)
+                if self.slowdown == 1:
+                    self.message = ""
+            pause = max(self.cfg.pause, 1.0 if self.slowdown > 1 else 0) * self.slowdown
+            if b < self.batch_total - 1 and pause > 0 and stop.wait(pause):
                 return False
         return not stop.is_set()
 
@@ -387,6 +403,8 @@ class CreateJob(BaseJob):
                     created = self.client.create_command(did, self.name, self.text)
                     break
                 except ApiError as e:
+                    if e.overloaded:
+                        self.overload_hits += 1
                     if not e.uncertain:
                         raise
                     # Сервер не підтвердив. Спершу перевіряємо, чи команда все ж створилась (тоді дубль не робимо),
@@ -398,7 +416,7 @@ class CreateJob(BaseJob):
                         return
                     if attempt >= self.client.retries:
                         raise
-                    time.sleep(1.5 * (attempt + 1))
+                    time.sleep((5.0 if e.overloaded else 1.5) * (attempt + 1))
             cid = created.get("id")
             if self.scan is not None and cid is not None:
                 cmds = list(self.scan.commands.get(did, []))
@@ -523,6 +541,8 @@ class DispatchJob(BaseJob):
             self.client.dispatch(did, int(r["command_id"]))
             self._set(did, status=SENT, sent_at=sent_at, detail="")
         except ApiError as e:
+            if e.overloaded:
+                self.overload_hits += 1
             if e.uncertain:  # могло дійти — слухаємо відповідь, але не повторюємо, щоб не надіслати двічі
                 self._set(did, status=SENT, sent_at=sent_at, detail=f"Сервер не підтвердив відправку: {e}")
             else:

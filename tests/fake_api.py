@@ -43,6 +43,8 @@ class FakeM2M:
         self.silent, self.flaky, self.uncertain = set(silent), set(flaky_create), set(uncertain_create)
         self.dispatch_403 = set(dispatch_403)
         self.dispatch_503: set[int] = set()   # сервер «виконав», але відповів 503
+        self.gateway_fail: set[int] = set()   # створення відповідає 400/502 (двічі), потім проходить
+        self.gateway_hits: dict[int, int] = {}
         self.log: list[tuple[str, str]] = []  # усі запити (метод, шлях) — для перевірки, що нічого зайвого
         self.ascending, self.answer_delay = ascending, answer_delay
         self.history = [{"id": i, "type": "COMMAND_RESULT", "deviceId": 1, "deviceName": "Генератор 001",
@@ -122,6 +124,10 @@ class FakeM2M:
                 if did in self.flaky and did not in self.flaky_hits:
                     self.flaky_hits.add(did)
                     return 503, {"message": "Service Unavailable"}
+                if did in self.gateway_fail and self.gateway_hits.get(did, 0) < 2:  # як M2M: 400 із 502 всередині
+                    self.gateway_hits[did] = self.gateway_hits.get(did, 0) + 1
+                    return 400, {"message": "org.springframework.web.reactive.function.client.WebClientResponseException"
+                                            "$BadGateway: 502 Bad Gateway from POST https://gps.m2m.eu/api/commands"}
                 if not self.devices[did]["permissions"]["CREATE_COMMANDS"]:
                     return 403, {"message": "Access denied"}
                 c = self._add(did, body["description"], body["attributes"]["data"])

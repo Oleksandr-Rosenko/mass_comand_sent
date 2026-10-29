@@ -531,7 +531,10 @@ def create_progress(job: CreateJob) -> None:
             h1, h2 = st.columns([3, 2], vertical_alignment="bottom")
             h1.markdown(f"#### Створення «{job.name}» у групі «{job.group['name']}»")
             if job.running:
-                h2.caption(f"Пачка {job.batch_no} з {job.batch_total} · пауза {job.cfg.pause:g} с між пачками")
+                h2.caption(f"Пачка {job.batch_no} з {job.batch_total} · пауза {job.cfg.pause * job.slowdown:g} с "
+                           "між пачками")
+            if job.running and job.message:
+                st.warning(job.message)
             pct = done / job.total if job.total else 1.0
             st.progress(min(1.0, pct), text=f"{fmt_n(done)} з {n_obj(job.total)} · {pct * 100:.0f}%")
         m = st.columns(4)
@@ -1115,6 +1118,8 @@ def dispatch_progress(job: DispatchJob) -> None:
                 st.markdown("**Готуюсь до відправки**")
                 st.progress(0.0, text=job.message or "Читаю історію сповіщень")
             elif job.phase == "sending":
+                if job.message:
+                    st.warning(job.message)
                 done = sent + c.get(ERROR, 0)
                 st.markdown(f"**Відправка** · пачка {job.batch_no} з {job.batch_total}")
                 st.progress(min(1.0, done / job.targets) if job.targets else 1.0,

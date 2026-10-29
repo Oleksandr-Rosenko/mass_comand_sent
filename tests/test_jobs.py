@@ -331,3 +331,25 @@ def test_scan_finds_duplicates():
     d = sc.duplicates(NAME)
     assert list(d) == [2] and len(d[2]) == 2
     srv.shutdown()
+
+
+def test_create_survives_gateway_502_wrapped_in_400():
+    """M2M віддає 400 з «502 Bad Gateway від gps.m2m.eu» — перевіряємо, повторюємо з паузою, без дублів."""
+    api = FakeM2M(n_devices=12)
+    api.gateway_fail = {3, 4, 5}
+    cl, srv = connect(api)
+    job = CreateJob(cl, {"id": 7, "name": "Г"}, devices_of(cl), NAME, TEXT, LoadCfg(batch_size=6, pause=0, workers=3))
+    import m2m_commands.jobs as J
+    real_sleep = J.time.sleep
+    J.time.sleep = lambda s: real_sleep(0.01)  # не чекати реальні паузи в тесті
+    try:
+        job.start()
+        job.wait(60)
+    finally:
+        J.time.sleep = real_sleep
+    assert job.counts().get(CREATED) == 12 and job.counts().get(ERROR, 0) == 0
+    assert all(n == 3 for d, n in api.create_calls.items() if d in (3, 4, 5))
+    assert job.max_slowdown > 1 and job.slowdown == 1  # сповільнився, а коли відпустило — повернувся
+    for did in (3, 4, 5):
+        assert len([c for c in api.commands[did] if c["description"] == NAME]) == 1
+    srv.shutdown()

@@ -15,7 +15,11 @@ TEXT_MAX = 255              # attributes.data, maxLength у свагері
 RESULT_TYPE = "COMMAND_RESULT"
 HISTORY_PER_PAGE = 100
 
+import re as _re
+
 _RETRY_ANY = (429, 500, 502, 503, 504)   # для читання: повторюємо завжди
+# M2M загортає збої внутрішнього сервісу команд (gps.m2m.eu) у 400: «…BadGateway: 502 Bad Gateway from POST …»
+_UPSTREAM = _re.compile(r"Bad ?Gateway|Service ?Unavailable|Gateway ?Time-?out|\b50[234]\b", _re.I)
 # Для створення/відправки — лише 429 (сервер відхилив через ліміт, точно не виконував). Будь-яка 5xx
 # вважається «невідомо, чи виконано»: відправку не повторюємо, створення — лише після перевірки (jobs.py).
 _RETRY_WRITE = (429,)
@@ -132,10 +136,17 @@ class M2MClient:
                 raise ApiError(f"Обрив з'єднання: {type(e).__name__}", uncertain=not idempotent) from e
             if r.status_code == 401 and not last and self._refresh(tok):
                 continue
+            upstream = r.status_code >= 400 and bool(_UPSTREAM.search(r.text[:2000]))
+            if upstream and idempotent and not last:
+                self._pause(attempt, r)
+                continue
             if r.status_code in retry_codes and not last:
                 self._pause(attempt, r)
                 continue
             if r.status_code >= 400:
+                if upstream:
+                    raise ApiError("Сервер команд перевантажений (502/503/504 від gps.m2m.eu)", r.status_code,
+                                   uncertain=not idempotent, overloaded=True)
                 raise ApiError(self._error_text(r), r.status_code,
                                uncertain=not idempotent and r.status_code >= 500 and r.status_code not in _RETRY_WRITE)
             if not r.content:
