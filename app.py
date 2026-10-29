@@ -20,7 +20,7 @@ from m2m_commands.sync import sync_docs
 from m2m_commands.jobs import (
     ACTIVITY_LABELS, ANSWERED, CREATED, ERROR, LABELS, NO_ANSWER, NOT_SENT, ONLINE, PERM_CREATE, PERM_EXECUTE,
     QUEUED, RUNNING, SENT, SKIPPED, STALE, TODAY, CreateJob, Device, DispatchJob, LoadCfg, ScanJob, activity,
-    by_priority, days_ago, find_by_name, now_utc, parse_dt,
+    by_priority, Command, days_ago, describe_error, find_by_name, now_utc, parse_dt,
 )
 from m2m_commands.stats import (apply_history, command_dir, device_index, fmt_local, group_view,
                                 history_since, merge_run)
@@ -1107,12 +1107,54 @@ def resend(job: DispatchJob) -> None:
                       wait_minutes=job.wait_minutes, poll_every=POLL_EVERY_S,
                       online_min=job.online_min, activity_every=job.activity_every)
     S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
-    S.dispatch_job = new
     if registry.claim("dispatch", S.client.base_url, job.group["id"], new) is not None:
         return
+    S.dispatch_job = new
     register_run(new)
     attach_persist(new)
     new.start()
+
+
+def retry_send_errors(job: DispatchJob) -> None:
+    """Лише для об'єктів зі статусом «Помилка»: заново читає їхні команди (ID могла змінитись), за потреби
+    створює команду і надсилає тільки їм — без повторного проходу по всій групі."""
+    err_ids = [did for did, r in job.rows.items() if r["status"] == ERROR]
+    devices = {d.id: d for d in S.devices.get(job.group["id"], [])}
+    targets, failed = [], []
+    bar = st.progress(0.0, text="Готую команди для об'єктів з помилкою…")
+    for n, did in enumerate(err_ids, 1):
+        r = job.rows[did]
+        dev = devices.get(did) or Device(id=did, name=r["name"], imei=r["imei"], last_message=r["last_message"])
+        try:
+            cmds = [Command.from_api(c) for c in S.client.device_commands(did) if c.get("id") is not None]
+            same = [c for c in find_by_name(cmds, job.name) if c.text == job.text]
+            if same:
+                cid = same[0].id
+            else:
+                cid = (S.client.create_command(did, job.name, job.text) or {}).get("id")
+                if cid is None:
+                    raise ApiError("сервер не повернув ID створеної команди")
+            targets.append((dev, int(cid)))
+        except ApiError as e:
+            failed.append((dev, f"Не вдалося підготувати команду: {describe_error(e, PERM_CREATE)}"))
+        bar.progress(n / len(err_ids), text=f"Готую команди: {n} з {len(err_ids)}")
+        time.sleep(0.3)  # м'яко до сервера команд
+    if not targets:
+        st.warning("Жодному з об'єктів з помилкою не вдалося підготувати команду: " +
+                   "; ".join(f"{d.name}: {why}" for d, why in failed[:5]))
+        return
+    new = DispatchJob(S.client, job.group, job.name, job.text, by_priority(targets), failed, dispatch_cfg(),
+                      wait_minutes=job.wait_minutes, poll_every=POLL_EVERY_S,
+                      online_min=job.online_min, activity_every=job.activity_every)
+    if registry.claim("dispatch", S.client.base_url, job.group["id"], new) is not None:
+        st.warning("На цій групі вже йде інша відправка — спробуйте після її завершення.")
+        return
+    S.prev_dispatch[(job.group["id"], job.name, job.text)] = job
+    S.dispatch_job = new
+    register_run(new)
+    attach_persist(new)
+    new.start()
+    st.rerun()
 
 
 def dispatch_progress(job: DispatchJob) -> None:
@@ -1217,6 +1259,13 @@ def dispatch_progress(job: DispatchJob) -> None:
                        help="Новий запуск лише для тих, хто не відповів, не отримав команду або отримав помилку"):
             resend(job)
             st.rerun()
+        n_err = c.get(ERROR, 0)
+        if n_err and not job.running:
+            e1, e2 = st.columns([1, 2], vertical_alignment="center")
+            if e1.button(f"Повторити помилки відправки ({fmt_n(n_err)})", width="stretch", key="d_retry_err"):
+                retry_send_errors(job)
+            e2.caption("Лише об'єкти зі статусом «Помилка»: заново прочитає їхні команди, за потреби створить NTP "
+                       "і надішле тільки їм. Решту групи не чіпає.")
         rows = job.snapshot()
         # у порядку відправки (онлайн першими, якщо увімкнено пріоритет), пропущені — в кінці
         rows.sort(key=lambda r: (r["order"] is None, r["order"] or 0, r["name"].lower()))
