@@ -1059,7 +1059,14 @@ def stats_tab() -> None:
     for g in S.groups:
         if not mine(g["id"]) or not g["deviceIds"]:  # порожні групи не показуємо — їх ніколи не перевірити
             continue
-        summary, rows, untouched = group_view(index, [int(i) for i in g["deviceIds"]])
+        ids = [int(i) for i in g["deviceIds"]]
+        summary, rows, untouched = group_view(index, ids)
+        # дати рахуємо тут, а не в stats.group_view: після оновлення застосунку старий модуль може лишитись у пам'яті
+        recs = [index[i] for i in ids if i in index]
+        summary["last_sent_at"] = max((r["last_sent"] for r in recs if r.get("last_sent")), default=None,
+                                      key=parse_dt)
+        summary["last_answer_at"] = max((r["answered_at"] for r in recs if r.get("accepted") and r.get("answered_at")),
+                                        default=None, key=parse_dt)
         views.append((g, summary, rows, untouched))
     views.sort(key=lambda v: (not v[1]["checked"], -(parse_dt(v[1]["last_run_at"]).timestamp()
                                                      if v[1]["last_run_at"] else 0),
