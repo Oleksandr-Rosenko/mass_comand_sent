@@ -1070,7 +1070,12 @@ def stats_tab() -> None:
                    "об'єкт.")
     else:
         st.caption("Враховуються лише групи, де є хоча б один об'єкт.")
-    checked = [v for v in views if v[1]["checked"]]
+    info = S.get("sync_info")
+    if info and not info.get("error"):
+        when = datetime.fromtimestamp(info["at"]).astimezone(LOCAL_TZ).strftime("%d.%m %H:%M")
+        st.caption(f"**«Прийняли» оновлено з історії сповіщень: {when}.** Оновлюється саме при відкритті цієї вкладки "
+                   "(не частіше ніж раз на 15 хв) або кнопкою «Підтягнути з історії».")
+    checked =[v for v in views if v[1]["checked"]]
     # унікальні об'єкти: той самий об'єкт може бути в кількох групах
     uniq = {int(i) for v in checked for i in v[0]["deviceIds"]}
     total_obj = len(uniq)
@@ -1095,7 +1100,8 @@ def stats_tab() -> None:
             continue
         label = (f"**{g['name']}** · {n_obj(x['objects'])} · :green[прийняли {fmt_n(x['accepted'])}] з "
                  f"{fmt_n(x['objects'])} ({x['percent']}%) · надсилали {fmt_n(x['sent'])} · "
-                 f"останнє {fmt_local(x['last_run_at'])}")
+                 f"відправка {fmt_local(x['last_sent_at']) or '—'} · "
+                 f"остання відповідь {fmt_local(x['last_answer_at']) or '—'}")
         with st.expander(label):
             df = pd.DataFrame(rows)
             view = pd.DataFrame([{

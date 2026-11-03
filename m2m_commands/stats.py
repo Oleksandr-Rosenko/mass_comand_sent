@@ -225,11 +225,15 @@ def group_view(index: dict[int, dict], device_ids: list[int]) -> tuple[dict, lis
     touched = {k: r for k, r in recs.items() if r["accepted"] or r.get("sent_runs")}
     last = max((r.get("last_sent") or r.get("answered_at") for r in touched.values()
                 if r.get("last_sent") or r.get("answered_at")), default=None, key=lambda v: parse_dt(v))
+    last_sent = max((r["last_sent"] for r in recs.values() if r.get("last_sent")), default=None,
+                    key=lambda v: parse_dt(v))
+    last_answer = max((r["answered_at"] for r in recs.values() if r["accepted"] and r.get("answered_at")),
+                      default=None, key=lambda v: parse_dt(v))
     accepted = sum(1 for r in recs.values() if r["accepted"])
     total = len(device_ids)
     summary = {"objects": total, "accepted": accepted, "sent": sum(1 for r in recs.values() if r.get("sent_runs")),
                "percent": round(accepted / total * 100) if total else 0, "last_run_at": last,
-               "checked": bool(touched)}
+               "last_sent_at": last_sent, "last_answer_at": last_answer, "checked": bool(touched)}
     rows = device_rows({"devices": recs})
     for r in rows:
         via = recs[str(r["ID об'єкта"])].get("via")
